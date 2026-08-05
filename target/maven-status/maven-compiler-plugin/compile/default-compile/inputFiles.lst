@@ -1,3 +1,4 @@
+D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\AccountController.java
 D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\AngelOneAuthController.java
 D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\BrokerCandleService.java
 D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\ChartController.java
@@ -5,4 +6,5 @@ D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\ChartStudi
 D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\CredentialStore.java
 D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\CustomStrategyController.java
 D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\OtherBrokerAuthController.java
+D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\UserStore.java
 D:\Projects\Trading-backtesting\src\main\java\com\trading\chartstudio\ZerodhaAuthController.java

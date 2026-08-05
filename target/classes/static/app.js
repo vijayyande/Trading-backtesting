@@ -3,6 +3,9 @@ const $$ = selector => [...document.querySelectorAll(selector)];
 const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 const COLORS = ['#47d7d1', '#f1bd56', '#b88cff', '#f27675', '#75b9ff', '#9bdc71'];
 let chart, mainSeries, candles = [], interval = '1d', chartType = 'candlestick', active = [], liveTimer, loadingMore = false, backtestRuns = [], customStrategies = new Map(), customDraft = { entryConditions: [], exitConditions: [], stopLoss: 0 };
+let account = { loggedIn: false, username: '', profiles: [] }, accountMode = 'login';
+let indicatorPane = 0;
+let mainMarkers = null;
 const intervalSeconds = () => ({ '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 }[interval] || 86400);
 const INDICATOR_PARAMS = {
   BB: [['period', 'Period', 20], ['std', 'Std dev', 2]], KC: [['period', 'EMA', 20], ['mult', 'ATR mult', 2]], DC: [['period', 'Period', 20]], ENVELOPE: [['period', 'Period', 20], ['percent', 'Width %', 2.5]],
@@ -61,13 +64,14 @@ const STRATEGIES = {
 };
 
 function initChart() {
+  const t = CHART_THEMES[currentTheme()];
   chart = LightweightCharts.createChart($('#chart'), {
     width: $('#chart').clientWidth, height: $('#chart').clientHeight,
-    layout: { background: { color: '#0c1014' }, textColor: '#82919d', fontFamily: "'DM Mono', monospace" },
-    grid: { vertLines: { color: '#172129' }, horzLines: { color: '#172129' } },
-    rightPriceScale: { borderColor: '#26313a' },
-    timeScale: { borderColor: '#26313a', timeVisible: true, tickMarkFormatter: t => new Date(t * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) },
-    crosshair: { vertLine: { color: '#4f6570' }, horzLine: { color: '#4f6570' } },
+    layout: { background: { color: t.bg }, textColor: t.text, fontFamily: "'DM Mono', monospace" },
+    grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+    rightPriceScale: { borderColor: t.border },
+    timeScale: { borderColor: t.border, timeVisible: true, tickMarkFormatter: t => new Date(t * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) },
+    crosshair: { vertLine: { color: t.crosshair }, horzLine: { color: t.crosshair } },
     localization: { timeFormatter: t => new Date(t * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }
   });
   window.addEventListener('resize', () => chart.applyOptions({ width: $('#chart').clientWidth, height: $('#chart').clientHeight }));
@@ -75,22 +79,33 @@ function initChart() {
 }
 function setSeries() {
   if (mainSeries) chart.removeSeries(mainSeries);
-  const config = chartType === 'line' ? { color: '#47d7d1', lineWidth: 2 }
+  const config = chartType === 'line' ? { color: lineColor(), lineWidth: 2 }
     : chartType === 'bar' ? { upColor: '#55c99d', downColor: '#e66e70', openVisible: true }
     : { upColor: '#55c99d', downColor: '#e66e70', borderUpColor: '#55c99d', borderDownColor: '#e66e70', wickUpColor: '#55c99d', wickDownColor: '#e66e70' };
-  mainSeries = chartType === 'line' ? chart.addLineSeries(config) : chartType === 'bar' ? chart.addBarSeries(config) : chart.addCandlestickSeries(config);
+  mainSeries = chartType === 'line' ? chart.addSeries(LightweightCharts.LineSeries, config) : chartType === 'bar' ? chart.addSeries(LightweightCharts.BarSeries, config) : chart.addSeries(LightweightCharts.CandlestickSeries, config);
+  mainMarkers = null;
   render();
 }
 function pointData(values) { return values.map((value, i) => value == null || !Number.isFinite(value) ? null : ({ time: candles[i].time / 1000, value })).filter(Boolean); }
-function addLine(name, values, color, options = {}) {
-  const series = chart.addLineSeries({ color, lineWidth: 1.5, lastValueVisible: false, priceLineVisible: false, title: name, ...options });
+function signedHistogramData(values) { return values.map((value, i) => value == null || !Number.isFinite(value) ? null : ({ time: candles[i].time / 1000, value, color: value >= 0 ? '#55c99d' : '#e66e70' })).filter(Boolean); }
+function addLine(name, values, color, options = {}, pane = 0) {
+  const series = chart.addSeries(LightweightCharts.LineSeries, { color, lineWidth: 1.5, lastValueVisible: false, priceLineVisible: false, title: name, ...options }, pane);
   series.setData(pointData(values)); chart._indicators.push(series); return series;
+}
+function addSignedHistogram(name, values, pane = 0) {
+  const series = chart.addSeries(LightweightCharts.HistogramSeries, { lastValueVisible: false, priceLineVisible: false, title: name }, pane);
+  series.setData(signedHistogramData(values)); chart._indicators.push(series); return series;
+}
+function setMainMarkers(markers) {
+  if (!chart || !mainSeries) return;
+  if (!mainMarkers) mainMarkers = LightweightCharts.createSeriesMarkers(mainSeries, []);
+  mainMarkers.setMarkers(markers || []);
 }
 function render(fit = true) {
   if (!candles.length) return;
   const data = chartType === 'line' ? candles.map(x => ({ time: x.time / 1000, value: x.close }))
     : candles.map(x => ({ time: x.time / 1000, open: x.open, high: x.high, low: x.low, close: x.close }));
-  mainSeries.setData(data); removeIndicators(); active.forEach((item, i) => drawIndicator(item.name, COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); if (fit) chart.timeScale().fitContent();
+  mainSeries.setData(data); removeIndicators(); indicatorPane = 0; active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); layoutPanes(); if (fit) chart.timeScale().fitContent();
 }
 function sma(values, period) { return values.map((_, i) => i < period - 1 ? null : values.slice(i - period + 1, i + 1).reduce((sum, n) => sum + n, 0) / period); }
 function ema(values, period) { const factor = 2 / (period + 1); let value; return values.map((n, i) => { value = i ? value + factor * (n - value) : n; return i < period - 1 ? null : value; }); }
@@ -102,8 +117,10 @@ function adxValues(data, period) { const tr = trueRange(data), dp = data.map((x,
 function cci(data, period) { const tp = data.map(x => (x.high + x.low + x.close) / 3), ma = sma(tp, period); return tp.map((v, i) => { if (ma[i] == null) return null; const m = ma[i], dev = data.slice(i - period + 1, i + 1).reduce((s, x) => s + Math.abs((x.high + x.low + x.close) / 3 - m), 0) / period; return dev ? (v - m) / (.015 * dev) : 0; }); }
 function mfi(data, period) { const tp = data.map(x => (x.high + x.low + x.close) / 3), vol = data.map(x => x.volume || 1), rmf = tp.map((v, i) => v * vol[i]); return tp.map((_, i) => { if (i < period) return null; const set = rmf.slice(i - period + 1, i + 1), ti = tp.slice(i - period + 1, i + 1); let pos = 0, neg = 0; for (let j = 1; j < period; j++) { if (ti[j] > ti[j - 1]) pos += set[j]; else neg += set[j]; } return neg ? 100 - 100 / (1 + pos / neg) : 100; }); }
 function williamsR(data, period) { const l = data.map(x => x.low), h = data.map(x => x.high), c = data.map(x => x.close); return c.map((_, i) => { if (i < period - 1) return null; const ll = Math.min(...l.slice(i - period + 1, i + 1)), hh = Math.max(...h.slice(i - period + 1, i + 1)); return hh === ll ? -50 : (hh - c[i]) / (hh - ll) * -100; }); }
-function oscillator(name, values, color) { addLine(name, values, color, { priceScaleId: 'indicator', scaleMargins: { top: .72, bottom: .03 } }); }
+function oscillator(name, values, color, pane) { addLine(name, values, color, {}, pane); }
+const BOTTOM_INDICATORS = new Set(['STDDEV', 'HV', 'RSI', 'MACD', 'PPO', 'STOCH', 'ROC', 'MOM', 'AO', 'AROOON', 'TRIX', 'DPO', 'CCI', 'WILLIAMS_R', 'ATR', 'OBV', 'MFI', 'CMF', 'ADL', 'ADOSC', 'FI', 'ADX', 'VORTEX']);
 function drawIndicator(name, color, config = {}) {
+  const pane = BOTTOM_INDICATORS.has(name) ? nextIndicatorPane() : 0;
   const period = Number(config.period) || 14, setting = (key, fallback) => Number(config[key] ?? fallback);
   const close = candles.map(x => x.close), high = candles.map(x => x.high), low = candles.map(x => x.low), volume = candles.map(x => x.volume), typical = candles.map(x => (x.high + x.low + x.close) / 3);
   if (name === 'SMA') addLine(`SMA ${period}`, sma(close, period), color);
@@ -117,38 +134,46 @@ function drawIndicator(name, color, config = {}) {
   else if (name === 'KC') { const mid = ema(close, period), atr = sma(trueRange(), period); addLine('KC Upper', mid.map((v, i) => v == null || atr[i] == null ? null : v + 2 * atr[i]), color); addLine('KC Mid', mid, '#81909d'); addLine('KC Lower', mid.map((v, i) => v == null || atr[i] == null ? null : v - 2 * atr[i]), color); }
   else if (name === 'DC') { addLine('Donchian High', high.map((_, i) => i < period - 1 ? null : Math.max(...high.slice(i - period + 1, i + 1))), color); addLine('Donchian Low', low.map((_, i) => i < period - 1 ? null : Math.min(...low.slice(i - period + 1, i + 1))), color); }
   else if (name === 'ENVELOPE') { const mid = sma(close, period); addLine('Envelope High', mid.map(v => v == null ? null : v * 1.025), color); addLine('Envelope Low', mid.map(v => v == null ? null : v * .975), color); }
-  else if (name === 'STDDEV') oscillator(`Std Dev ${period}`, sma(close, period).map((m, i) => m == null ? null : Math.sqrt(close.slice(i - period + 1, i + 1).reduce((s, v) => s + (v - m) ** 2, 0) / period)), color);
-  else if (name === 'HV') oscillator(`Historical Volatility ${period}`, close.map((_, i) => i < period ? null : Math.sqrt(close.slice(i - period + 1, i + 1).reduce((s, v, j, a) => j ? s + Math.log(v / a[j - 1]) ** 2 : s, 0) / period) * Math.sqrt(252) * 100), color);
+  else if (name === 'STDDEV') oscillator(`Std Dev ${period}`, sma(close, period).map((m, i) => m == null ? null : Math.sqrt(close.slice(i - period + 1, i + 1).reduce((s, v) => s + (v - m) ** 2, 0) / period)), color, pane);
+  else if (name === 'HV') oscillator(`Historical Volatility ${period}`, close.map((_, i) => i < period ? null : Math.sqrt(close.slice(i - period + 1, i + 1).reduce((s, v, j, a) => j ? s + Math.log(v / a[j - 1]) ** 2 : s, 0) / period) * Math.sqrt(252) * 100), color, pane);
   else if (name === 'ICHIMOKU') { const midRange = n => high.map((_, i) => i < n - 1 ? null : (Math.max(...high.slice(i - n + 1, i + 1)) + Math.min(...low.slice(i - n + 1, i + 1))) / 2); const conversion = midRange(9), base = midRange(26); addLine('Ichimoku Conversion', conversion, color); addLine('Ichimoku Base', base, '#f1bd56'); addLine('Ichimoku Span A', conversion.map((v, i) => v == null || base[i] == null ? null : (v + base[i]) / 2), '#75b9ff'); addLine('Ichimoku Span B', midRange(52), '#b88cff'); }
   else if (name === 'VWAP') { let pv = 0, total = 0; addLine('VWAP', typical.map((v, i) => { pv += v * volume[i]; total += volume[i]; return pv / total; }), color); }
   else if (name === 'SAR') { let sar = low[0], ep = high[0], af = setting('accel', .02), rising = true; const baseAf = af, maxAf = setting('maxAccel', .2); const values = close.map((_, i) => { if (!i) return sar; sar = sar + af * (ep - sar); if (rising && low[i] < sar) { rising = false; sar = ep; ep = low[i]; af = baseAf; } else if (!rising && high[i] > sar) { rising = true; sar = ep; ep = high[i]; af = baseAf; } else if (rising && high[i] > ep) { ep = high[i]; af = Math.min(maxAf, af + baseAf); } else if (!rising && low[i] < ep) { ep = low[i]; af = Math.min(maxAf, af + baseAf); } return sar; }); addLine('Parabolic SAR', values, color, { lineWidth: 1 }); }
   else if (name === 'SUPERTREND') { const atr = sma(trueRange(), setting('atrPeriod', 10)), mult = setting('mult', 3); let upper, lower, trend = 1; const values = close.map((v, i) => { if (atr[i] == null) return null; const mid = (high[i] + low[i]) / 2, bu = mid + mult * atr[i], bl = mid - mult * atr[i]; upper = i && upper != null && close[i - 1] <= upper ? Math.min(bu, upper) : bu; lower = i && lower != null && close[i - 1] >= lower ? Math.max(bl, lower) : bl; if (v > upper) trend = 1; else if (v < lower) trend = -1; return trend === 1 ? lower : upper; }); addLine('Supertrend', values, color, { lineWidth: 2 }); }
-  else if (name === 'RSI') oscillator(`RSI ${period}`, rsi(close, period), color);
-  else if (name === 'MACD') { const fast = ema(close, setting('fast', 12)), slow = ema(close, setting('slow', 26)), macd = close.map((_, i) => fast[i] == null || slow[i] == null ? null : fast[i] - slow[i]); oscillator('MACD', macd, color); oscillator('Signal', ema(macd.map(x => x ?? 0), setting('signal', 9)), '#f1bd56'); }
-  else if (name === 'PPO') { const fast = ema(close, Math.max(2, Math.floor(period * .6))), slow = ema(close, period); oscillator('PPO', close.map((_, i) => fast[i] == null || slow[i] == null ? null : (fast[i] - slow[i]) / slow[i] * 100), color); }
-  else if (name === 'STOCH') oscillator('Stochastic %K', close.map((v, i) => i < 13 ? null : 100 * (v - Math.min(...low.slice(i - 13, i + 1))) / (Math.max(...high.slice(i - 13, i + 1)) - Math.min(...low.slice(i - 13, i + 1)) || 1)), color);
-  else if (name === 'ROC') oscillator('ROC 12', close.map((v, i) => i < 12 ? null : 100 * (v - close[i - 12]) / close[i - 12]), color);
-  else if (name === 'MOM') oscillator(`Momentum ${period}`, close.map((v, i) => i < period ? null : v - close[i - period]), color);
-  else if (name === 'AO') oscillator('Awesome Oscillator', sma(high.map((v, i) => (v + low[i]) / 2), 5).map((v, i) => v == null || sma(high.map((x, j) => (x + low[j]) / 2), 34)[i] == null ? null : v - sma(high.map((x, j) => (x + low[j]) / 2), 34)[i]), color);
-  else if (name === 'AROOON') oscillator(`Aroon ${period}`, high.map((_, i) => { if (i < period - 1) return null; const hs = high.slice(i - period + 1, i + 1), ls = low.slice(i - period + 1, i + 1); return 100 * (hs.lastIndexOf(Math.max(...hs)) - ls.lastIndexOf(Math.min(...ls))) / period; }), color);
-  else if (name === 'TRIX') { const a = ema(close, period), b = ema(a.map(x => x ?? close[0]), period), d = ema(b.map(x => x ?? close[0]), period); oscillator(`TRIX ${period}`, d.map((v, i) => i && v != null && d[i - 1] ? 100 * (v - d[i - 1]) / d[i - 1] : null), color); }
-  else if (name === 'DPO') { const avg = sma(close, period), shift = Math.floor(period / 2) + 1; oscillator(`DPO ${period}`, close.map((v, i) => i < period + shift - 1 ? null : v - avg[i - shift]), color); }
-  else if (name === 'CCI') { const avg = sma(typical, 20); oscillator('CCI 20', typical.map((v, i) => avg[i] == null ? null : (v - avg[i]) / (.015 * typical.slice(i - 19, i + 1).reduce((s, x) => s + Math.abs(x - avg[i]), 0) / 20 || 1)), color); }
-  else if (name === 'WILLIAMS_R') oscillator('Williams %R', close.map((v, i) => i < 13 ? null : -100 * (Math.max(...high.slice(i - 13, i + 1)) - v) / (Math.max(...high.slice(i - 13, i + 1)) - Math.min(...low.slice(i - 13, i + 1)) || 1)), color);
-  else if (name === 'ATR') oscillator('ATR 14', sma(trueRange(), 14), color);
-  else if (name === 'OBV') { let obv = 0; oscillator('OBV', close.map((v, i) => { if (i) obv += v >= close[i - 1] ? volume[i] : -volume[i]; return obv; }), color); }
-  else if (name === 'MFI') { const raw = typical.map((v, i) => v * volume[i]); oscillator('MFI 14', typical.map((v, i) => { if (i < 14) return null; let pos = 0, neg = 0; for (let j = i - 13; j <= i; j++) typical[j] >= typical[j - 1] ? pos += raw[j] : neg += raw[j]; return 100 - 100 / (1 + pos / (neg || 1)); }), color); }
-  else if (name === 'CMF') { const flow = candles.map((x, i) => ((x.close - x.low) - (x.high - x.close)) / (x.high - x.low || 1) * volume[i]); oscillator(`CMF ${period}`, flow.map((_, i) => i < period - 1 ? null : flow.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0) / volume.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0)), color); }
-  else if (name === 'ADL') { let adl = 0; oscillator('Accumulation Distribution', candles.map((x, i) => adl += ((x.close - x.low) - (x.high - x.close)) / (x.high - x.low || 1) * volume[i]), color); }
-  else if (name === 'ADOSC') { let adl = 0; const line = candles.map((x, i) => adl += ((x.close - x.low) - (x.high - x.close)) / (x.high - x.low || 1) * volume[i]); const fast = ema(line, Math.max(2, Math.floor(period / 2))), slow = ema(line, period); oscillator('Chaikin Oscillator', line.map((_, i) => fast[i] == null || slow[i] == null ? null : fast[i] - slow[i]), color); }
-  else if (name === 'FI') oscillator(`Force Index ${period}`, ema(close.map((v, i) => i ? (v - close[i - 1]) * volume[i] : 0), period), color);
-  else if (name === 'ADX') { const tr = trueRange(); oscillator('ADX 14', tr.map((_, i) => i < 14 ? null : 100 * sma(tr, 14)[i] / (close[i] || 1)), color); }
-  else if (name === 'VORTEX') { const tr = trueRange(), plus = candles.map((x, i) => i ? Math.abs(x.high - candles[i - 1].low) : 0), minus = candles.map((x, i) => i ? Math.abs(x.low - candles[i - 1].high) : 0); oscillator(`Vortex ${period}`, tr.map((_, i) => i < period ? null : (plus.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0) - minus.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0)) / tr.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0)), color); }
+  else if (name === 'RSI') oscillator(`RSI ${period}`, rsi(close, period), color, pane);
+  else if (name === 'MACD') { const fast = ema(close, setting('fast', 12)), slow = ema(close, setting('slow', 26)), macd = close.map((_, i) => fast[i] == null || slow[i] == null ? null : fast[i] - slow[i]), signal = ema(macd.map(x => x ?? 0), setting('signal', 9)); addSignedHistogram('MACD Histogram', macd.map((v, i) => v == null || signal[i] == null ? null : v - signal[i]), pane); oscillator('MACD', macd, color, pane); oscillator('Signal', signal, '#f1bd56', pane); }
+  else if (name === 'PPO') { const fast = ema(close, Math.max(2, Math.floor(period * .6))), slow = ema(close, period); oscillator('PPO', close.map((_, i) => fast[i] == null || slow[i] == null ? null : (fast[i] - slow[i]) / slow[i] * 100), color, pane); }
+  else if (name === 'STOCH') { const s = stoch(candles, setting('k', 14), setting('d', 3)); addSignedHistogram('Stochastic Histogram', s.k.map((v, i) => v == null || s.d[i] == null ? null : v - s.d[i]), pane); oscillator('Stochastic %K', s.k, color, pane); oscillator('Stochastic %D', s.d, '#f1bd56', pane); }
+  else if (name === 'ROC') oscillator(`ROC ${period}`, close.map((v, i) => i < period ? null : 100 * (v - close[i - period]) / close[i - period]), color, pane);
+  else if (name === 'MOM') oscillator(`Momentum ${period}`, close.map((v, i) => i < period ? null : v - close[i - period]), color, pane);
+  else if (name === 'AO') { const median = high.map((v, i) => (v + low[i]) / 2), fast = sma(median, 5), slow = sma(median, 34); addSignedHistogram('Awesome Oscillator', fast.map((v, i) => v == null || slow[i] == null ? null : v - slow[i]), pane); }
+  else if (name === 'AROOON') oscillator(`Aroon ${period}`, high.map((_, i) => { if (i < period - 1) return null; const hs = high.slice(i - period + 1, i + 1), ls = low.slice(i - period + 1, i + 1); return 100 * (hs.lastIndexOf(Math.max(...hs)) - ls.lastIndexOf(Math.min(...ls))) / period; }), color, pane);
+  else if (name === 'TRIX') { const a = ema(close, period), b = ema(a.map(x => x ?? close[0]), period), d = ema(b.map(x => x ?? close[0]), period); oscillator(`TRIX ${period}`, d.map((v, i) => i && v != null && d[i - 1] ? 100 * (v - d[i - 1]) / d[i - 1] : null), color, pane); }
+  else if (name === 'DPO') { const avg = sma(close, period), shift = Math.floor(period / 2) + 1; oscillator(`DPO ${period}`, close.map((v, i) => i < period + shift - 1 ? null : v - avg[i - shift]), color, pane); }
+  else if (name === 'CCI') oscillator(`CCI ${period}`, cci(candles, period), color, pane);
+  else if (name === 'WILLIAMS_R') oscillator(`Williams %R ${period}`, williamsR(candles, period), color, pane);
+  else if (name === 'ATR') oscillator(`ATR ${period}`, sma(trueRange(), period), color, pane);
+  else if (name === 'OBV') { let obv = 0; oscillator('OBV', close.map((v, i) => { if (i) obv += v >= close[i - 1] ? volume[i] : -volume[i]; return obv; }), color, pane); }
+  else if (name === 'MFI') oscillator(`MFI ${period}`, mfi(candles, period), color, pane);
+  else if (name === 'CMF') { const flow = candles.map((x, i) => ((x.close - x.low) - (x.high - x.close)) / (x.high - x.low || 1) * volume[i]); oscillator(`CMF ${period}`, flow.map((_, i) => i < period - 1 ? null : flow.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0) / volume.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0)), color, pane); }
+  else if (name === 'ADL') { let adl = 0; oscillator('Accumulation Distribution', candles.map((x, i) => adl += ((x.close - x.low) - (x.high - x.close)) / (x.high - x.low || 1) * volume[i]), color, pane); }
+  else if (name === 'ADOSC') { let adl = 0; const line = candles.map((x, i) => adl += ((x.close - x.low) - (x.high - x.close)) / (x.high - x.low || 1) * volume[i]); const fast = ema(line, Math.max(2, Math.floor(period / 2))), slow = ema(line, period); addSignedHistogram('Chaikin Oscillator', line.map((_, i) => fast[i] == null || slow[i] == null ? null : fast[i] - slow[i]), pane); }
+  else if (name === 'FI') oscillator(`Force Index ${period}`, ema(close.map((v, i) => i ? (v - close[i - 1]) * volume[i] : 0), period), color, pane);
+  else if (name === 'ADX') oscillator(`ADX ${period}`, adxValues(candles, period).adx, color, pane);
+  else if (name === 'VORTEX') { const tr = trueRange(), plus = candles.map((x, i) => i ? Math.abs(x.high - candles[i - 1].low) : 0), minus = candles.map((x, i) => i ? Math.abs(x.low - candles[i - 1].high) : 0); oscillator(`Vortex ${period}`, tr.map((_, i) => i < period ? null : (plus.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0) - minus.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0)) / tr.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0)), color, pane); }
 }
 function removeIndicators() { (chart._indicators || []).forEach(series => chart.removeSeries(series)); chart._indicators = []; }
+function nextIndicatorPane() { return ++indicatorPane; }
+function layoutPanes() {
+  const panes = chart.panes();
+  if (!panes || panes.length < 2) return;
+  const subs = panes.length - 1;
+  panes[0].setStretchFactor(subs * 1.5);
+  for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(1);
+}
 function updateQuote() { const now = candles.at(-1), previous = candles.at(-2); if (!now || !previous) return; const pct = (now.close - previous.close) / previous.close * 100; $('#open').textContent = now.open.toFixed(2); $('#high').textContent = now.high.toFixed(2); $('#low').textContent = now.low.toFixed(2); $('#close').textContent = now.close.toFixed(2); $('#change').textContent = `${pct >= 0 ? 'UP +' : 'DOWN '}${pct.toFixed(2)}%`; $('#change').style.color = pct >= 0 ? '#5ed69d' : '#f27675'; }
 async function load() { const provider = $('#provider').value || 'DEMO', symbol = $('#symbol').value.trim() || 'NSE:RELIANCE'; $('#updated').textContent = 'Fetching candles...'; try { const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}`); if (!response.ok) throw Error(); const data = await response.json(); candles = data.candles; $('#instrument').textContent = data.symbol; $('#intervalName').textContent = ` - ${{ '1m':'1 minute','5m':'5 minutes','15m':'15 minutes','1h':'1 hour','1d':'1 day' }[interval]}`; updateQuote(); render(); renderStrategy(); $('#updated').textContent = 'Live data connected'; startLiveUpdates(); } catch { toast('Could not load market candles. Select Demo or connect a broker.'); } }
-async function refreshLiveCandle() { const provider = $('#provider').value || 'DEMO'; try { const response = await fetch(`/api/live-candle?provider=${provider}&symbol=${encodeURIComponent($('#symbol').value.trim() || 'NSE:RELIANCE')}&interval=${interval}`); if (!response.ok) { clearInterval(liveTimer); $('#updated').textContent = 'Broker stream requires connection'; return; } const latest = await response.json(); const last = candles.length - 1; candles[last] = { ...latest, time: candles[last].time }; const point = chartType === 'line' ? { time: candles[last].time / 1000, value: latest.close } : { time: candles[last].time / 1000, open: latest.open, high: latest.high, low: latest.low, close: latest.close }; mainSeries.update(point); removeIndicators(); active.forEach((item, i) => drawIndicator(item.name, COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); updateQuote(); $('#updated').textContent = `Live update ${new Date().toLocaleTimeString()}`; } catch { $('#updated').textContent = 'Live feed reconnecting...'; } }
+async function refreshLiveCandle() { const provider = $('#provider').value || 'DEMO'; try { const response = await fetch(`/api/live-candle?provider=${provider}&symbol=${encodeURIComponent($('#symbol').value.trim() || 'NSE:RELIANCE')}&interval=${interval}`); if (!response.ok) { clearInterval(liveTimer); $('#updated').textContent = 'Broker stream requires connection'; return; } const latest = await response.json(); const last = candles.length - 1; candles[last] = { ...latest, time: candles[last].time }; const point = chartType === 'line' ? { time: candles[last].time / 1000, value: latest.close } : { time: candles[last].time / 1000, open: latest.open, high: latest.high, low: latest.low, close: latest.close }; mainSeries.update(point); removeIndicators(); indicatorPane = 0; active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); layoutPanes(); updateQuote(); $('#updated').textContent = `Live update ${new Date().toLocaleTimeString()}`; } catch { $('#updated').textContent = 'Live feed reconnecting...'; } }
 function startLiveUpdates() { clearInterval(liveTimer); liveTimer = setInterval(refreshLiveCandle, 2500); }
 async function loadMore() {
   if (loadingMore) return;
@@ -249,6 +274,7 @@ async function saveCustomStrategy() {
   toast('Custom strategy saved.');
 }
 async function setup() {
+  initTheme();
   initChart();
   chart.timeScale().subscribeVisibleTimeRangeChange(range => {
     if (!range || !candles.length || loadingMore) return;
@@ -286,7 +312,7 @@ async function setup() {
       if (broker === 'angel_one') broker = 'angel-one';
       const status = await (await fetch('/api/auth/' + broker + '/status')).json();
       if (status.connected) { $('#connect').textContent = p.name + ' connected'; $('#providerStatus').textContent = 'Connected'; }
-      else { $('#connect').textContent = 'Connect ' + p.name; $('#providerStatus').textContent = status.configured ? 'Ready to connect' : p.status; }
+      else { $('#connect').textContent = account.loggedIn && brokerHasSaved(p.id) ? 'Connect ' + p.name + ' (saved)' : 'Connect ' + p.name; $('#providerStatus').textContent = status.configured ? 'Ready to connect' : p.status; }
     } catch { $('#connect').textContent = 'Connect ' + p.name; }
     load();
   };
@@ -309,6 +335,7 @@ async function setup() {
     const name = $('#indicator').value, period = Math.max(2, Math.min(200, Number($('#indicatorPeriod').value) || 14));
     if (active.some(item => item.name === name)) return toast(name + ' is already active; edit its configuration below.');
     const config = defaultIndicatorConfig(name); if ('period' in config) config.period = period;
+    config.color = COLORS[active.length % COLORS.length];
     active.push({ name, config });
     showIndicators();
     render();
@@ -316,7 +343,7 @@ async function setup() {
   $('#clearIndicators').onclick = () => { active = []; showIndicators(); render(); };
   $('#connect').onclick = () => toast($('#provider').value === 'DEMO' ? 'Demo feed is already connected.' : 'Add the broker API adapter and credentials on the server to enable its live stream.');
   $('#brokerDialogClose').onclick = () => { document.getElementById('brokerDialog').close(); };
-  document.getElementById('brokerDialog').addEventListener('close', () => { document.getElementById('brokerDialogFields').style.display = 'none'; document.getElementById('brokerFieldsZerodha').style.display = 'none'; document.getElementById('brokerFieldsAngel').style.display = 'none'; document.getElementById('brokerFieldsUpstox').style.display = 'none'; document.getElementById('brokerFieldsFyers').style.display = 'none'; });
+  document.getElementById('brokerDialog').addEventListener('close', () => { document.getElementById('brokerDialogFields').style.display = 'none'; document.getElementById('brokerFieldsZerodha').style.display = 'none'; document.getElementById('brokerFieldsAngel').style.display = 'none'; document.getElementById('brokerFieldsUpstox').style.display = 'none'; document.getElementById('brokerFieldsFyers').style.display = 'none'; document.getElementById('brokerSavedSection').style.display = 'none'; $('#vaultSaveName').value = ''; });
   $('#strategy').innerHTML = '<option value="">Select a strategy…</option>' + Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
   $('#strategy').onchange = () => {
     const s = STRATEGIES[$('#strategy').value];
@@ -327,7 +354,7 @@ async function setup() {
   };
   $('#strategy').dispatchEvent(new Event('change'));
   $('#applyStrategy').onclick = renderStrategy;
-  $('#clearStrategy').onclick = () => { $('#strategy').value = ''; $('#strategy').dispatchEvent(new Event('change')); mainSeries?.setMarkers([]); $('#strategySummary').innerHTML = ''; };
+  $('#clearStrategy').onclick = () => { $('#strategy').value = ''; $('#strategy').dispatchEvent(new Event('change')); setMainMarkers([]); $('#strategySummary').innerHTML = ''; };
   $('#addEntryCondition').onclick = () => addCustomCondition('entryConditions');
   $('#addExitCondition').onclick = () => addCustomCondition('exitConditions');
   $('#newCustomStrategy').onclick = resetCustomStrategy;
@@ -337,10 +364,38 @@ async function setup() {
   try { await loadCustomStrategies(); } catch { toast('Saved custom strategies are unavailable.'); }
   $('#runBacktest').onclick = runBacktest;
   $('#clearBacktest').onclick = clearBacktest;
+  $('#accountBtn').onclick = () => { account.loggedIn ? openVaultDialog() : openAccountDialog('login'); };
+  $('#accountDialogClose').onclick = () => { document.getElementById('accountDialog').close(); };
+  $('#accountDialogSubmit').onclick = submitAccount;
+  $('#accountSwitch').onclick = () => openAccountDialog(accountMode === 'login' ? 'register' : 'login');
+  $('#accountUsername').onkeydown = e => { if (e.key === 'Enter') submitAccount(); };
+  $('#accountPassword').onkeydown = e => { if (e.key === 'Enter') submitAccount(); };
+  $('#vaultDialogClose').onclick = () => { document.getElementById('vaultDialog').close(); };
+  $('#vaultDialogDone').onclick = () => { document.getElementById('vaultDialog').close(); };
+  $('#vaultLogout').onclick = logout;
+  try { await refreshAccount(); } catch { }
 }
 function showIndicators() {
-  $('#indicatorList').innerHTML = active.map((item, i) => { const config = item.config || { period: item.period || 14 }; return `<div class="indicator-chip" style="border-color:${COLORS[i % COLORS.length]}"><span>${item.name}</span>${indicatorParams(item.name).map(([key, label, fallback]) => `<label>${label}<input aria-label="${item.name} ${label}" data-config-index="${i}" data-config-key="${key}" type="number" step="any" min="0" value="${config[key] ?? fallback}"></label>`).join('')}<button class="apply" data-apply-index="${i}">Apply</button><button aria-label="Remove ${item.name}" data-remove-index="${i}">x</button></div>`; }).join('');
-  const applyConfig = index => { const item = active[index]; item.config ||= { period: item.period || 14 }; $$('#indicatorList [data-config-index="' + index + '"]').forEach(input => item.config[input.dataset.configKey] = Math.max(0, Number(input.value) || 0)); render(); };
+  $('#indicatorList').innerHTML = active.map((item, i) => {
+    const config = item.config || { period: item.period || 14 };
+    const color = config.color || COLORS[i % COLORS.length];
+    return `<div class="indicator-chip" style="border-color:${color}">
+      <span>${item.name}</span>
+      ${indicatorParams(item.name).map(([key, label, fallback]) => `<label>${label}<input aria-label="${item.name} ${label}" data-config-index="${i}" data-config-key="${key}" type="number" step="any" min="0" value="${config[key] ?? fallback}"></label>`).join('')}
+      <label>Color<input type="color" data-config-index="${i}" data-config-key="color" value="${color}"></label>
+      <button class="apply" data-apply-index="${i}">Apply</button>
+      <button aria-label="Remove ${item.name}" data-remove-index="${i}">x</button>
+    </div>`;
+  }).join('');
+  const applyConfig = index => {
+    const item = active[index];
+    item.config ||= { period: item.period || 14 };
+    $$('#indicatorList [data-config-index="' + index + '"]').forEach(input => {
+      const value = input.type === 'color' ? input.value : Math.max(0, Number(input.value) || 0);
+      item.config[input.dataset.configKey] = value;
+    });
+    render();
+  };
   $$('#indicatorList [data-config-index]').forEach(input => input.addEventListener('change', () => applyConfig(Number(input.dataset.configIndex))));
   $$('#indicatorList [data-apply-index]').forEach(button => button.onclick = () => applyConfig(Number(button.dataset.applyIndex)));
   $$('#indicatorList [data-remove-index]').forEach(button => button.onclick = () => { active.splice(Number(button.dataset.removeIndex), 1); showIndicators(); render(); });
@@ -473,7 +528,7 @@ function executeBacktest(symbol, data, strategy, params, quantity, capital) {
   return { symbol, data, orders, allocated: capital, endingValue: cash, pnl: cash - capital, stats: { trades: completed.length, wins: completed.filter(order => order.pnl > 0).length, grossProfit, grossLoss } };
 }
 function backtestMarkers(run) {
-  mainSeries.setMarkers(run.orders.map(order => ({
+  setMainMarkers(run.orders.map(order => ({
     time: order.time / 1000, position: order.type === 'BUY' ? 'belowBar' : 'aboveBar',
     color: order.type === 'BUY' ? '#55c99d' : '#e66e70', shape: order.type === 'BUY' ? 'arrowUp' : 'arrowDown',
     text: order.forced ? 'EXIT' : order.type
@@ -554,12 +609,12 @@ async function runBacktest() {
 function renderStrategy() {
   const name = $('#strategy').value;
   const summary = $('#strategySummary');
-  if (!name || !candles.length) { mainSeries.setMarkers([]); summary.innerHTML = ''; return; }
+  if (!name || !candles.length) { setMainMarkers([]); summary.innerHTML = ''; return; }
   const keyed = {};
   $$('#strategyParams input').forEach(inp => { keyed[inp.dataset.k] = Number(inp.value) || Number(inp.placeholder); });
   const signals = computeStrategy(name, keyed, candles);
-  if (!signals.length) { mainSeries.setMarkers([]); summary.innerHTML = '<div>No signals generated.</div>'; return; }
-  mainSeries.setMarkers(signals.map(s => ({ time: s.time / 1000, position: s.type === 'buy' ? 'belowBar' : 'aboveBar', color: s.type === 'buy' ? '#55c99d' : '#e66e70', shape: s.type === 'buy' ? 'arrowUp' : 'arrowDown', text: s.type.toUpperCase() })));
+  if (!signals.length) { setMainMarkers([]); summary.innerHTML = '<div>No signals generated.</div>'; return; }
+  setMainMarkers(signals.map(s => ({ time: s.time / 1000, position: s.type === 'buy' ? 'belowBar' : 'aboveBar', color: s.type === 'buy' ? '#55c99d' : '#e66e70', shape: s.type === 'buy' ? 'arrowUp' : 'arrowDown', text: s.type.toUpperCase() })));
   let wins = 0, total = 0, pnl = 0;
   for (let i = 0; i < signals.length - 1; i += 2) {
     if (signals[i].type === 'buy' && signals[i + 1]?.type === 'sell') {
@@ -570,110 +625,267 @@ function renderStrategy() {
   summary.innerHTML = `<div>Signals: <span>${signals.length}</span> | Trades: <span>${total}</span> | Win rate: <span>${total ? (wins / total * 100).toFixed(0) : 0}%</span> | P&L: <span class="${pnl >= 0 ? 'signal-buy' : 'signal-sell'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</span></div>`;
 }
 function toast(message) { const element = $('#toast'); element.textContent = message; element.classList.add('show'); setTimeout(() => element.classList.remove('show'), 3200); }
+const brokerSlugFor = id => ({ ANGEL_ONE: 'angel-one', ZERODHA: 'zerodha', UPSTOX: 'upstox', FYERS: 'fyers' }[id] || id.toLowerCase());
+const brokerHasSaved = id => account.loggedIn && account.profiles.some(p => p.broker === brokerSlugFor(id));
+
+async function refreshAccount() {
+  try {
+    const res = await fetch('/api/account/me');
+    if (!res.ok) throw Error();
+    account = await res.json();
+    account.profiles ||= [];
+  } catch { account = { loggedIn: false, username: '', profiles: [] }; }
+  renderAccountButton();
+}
+function renderAccountButton() {
+  const btn = $('#accountBtn');
+  if (!btn) return;
+  if (account.loggedIn) {
+    const initials = (account.username || '?').slice(0, 2).toUpperCase();
+    btn.textContent = initials;
+    btn.title = account.username + ' — saved credentials';
+  } else {
+    btn.textContent = 'Sign in';
+    btn.title = 'Sign in or create an account';
+  }
+}
+function openAccountDialog(mode = 'login') {
+  accountMode = mode;
+  const login = mode === 'login';
+  $('#accountDialogTitle').textContent = login ? 'Sign in' : 'Create an account';
+  $('#accountDialogSubmit').textContent = login ? 'Sign in' : 'Create account';
+  $('#accountSwitchText').textContent = login ? 'New here?' : 'Already have an account?';
+  $('#accountSwitch').textContent = login ? 'Create an account' : 'Sign in';
+  $('#accountPassword').setAttribute('autocomplete', login ? 'current-password' : 'new-password');
+  $('#accountError').textContent = '';
+  $('#accountPassword').value = '';
+  $('#accountUsername').focus();
+  document.getElementById('accountDialog').showModal();
+}
+async function submitAccount() {
+  const username = $('#accountUsername').value.trim();
+  const password = $('#accountPassword').value;
+  if (!username || !password) { $('#accountError').textContent = 'Enter a username and password.'; return; }
+  $('#accountDialogSubmit').disabled = true;
+  try {
+    const res = await fetch('/api/account/' + (accountMode === 'login' ? 'login' : 'register'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { $('#accountError').textContent = data.message || 'Request failed.'; return; }
+    document.getElementById('accountDialog').close();
+    await refreshAccount();
+    toast(accountMode === 'login' ? 'Signed in as ' + username + '.' : 'Account created and signed in as ' + username + '.');
+    if ($('#provider').value) $('#provider').dispatchEvent(new Event('change'));
+  } catch { $('#accountError').textContent = 'Could not reach the server.'; }
+  finally { $('#accountDialogSubmit').disabled = false; }
+}
+async function logout() {
+  try { await fetch('/api/account/logout', { method: 'POST' }); } catch { }
+  document.getElementById('vaultDialog').close();
+  await refreshAccount();
+  toast('Signed out.');
+  if ($('#provider').value) $('#provider').dispatchEvent(new Event('change'));
+}
+async function openVaultDialog() {
+  await refreshAccount();
+  if (!account.loggedIn) { openAccountDialog('login'); return; }
+  $('#vaultUsername').textContent = account.username;
+  const byBroker = {};
+  account.profiles.forEach(p => { (byBroker[p.broker] ||= []).push(p); });
+  const brokerNames = { 'angel-one': 'Angel One', 'zerodha': 'Zerodha', 'upstox': 'Upstox', 'fyers': 'Fyers' };
+  $('#vaultList').innerHTML = Object.entries(byBroker).map(([broker, items]) =>
+    '<div class="vault-group"><div class="vault-group-name">' + (brokerNames[broker] || broker) + '</div>' +
+    items.map(p => '<div class="vault-item"><span class="vault-item-name">' + escapeHtml(p.name) + '</span><span class="vault-actions"><button data-use="' + p.id + '">Use</button><button data-delete="' + p.id + '" class="danger">Delete</button></span></div>').join('') +
+    '</div>').join('');
+  $('#vaultEmpty').style.display = account.profiles.length ? 'none' : 'block';
+  $$('#vaultList [data-use]').forEach(b => b.onclick = () => reuseSavedProfile(Number(b.dataset.use)));
+  $$('#vaultList [data-delete]').forEach(b => b.onclick = async () => {
+    try { await fetch('/api/vault/' + b.dataset.delete, { method: 'DELETE' }); } catch { }
+    await refreshAccount();
+    openVaultDialog();
+  });
+  document.getElementById('vaultDialog').showModal();
+}
+async function reuseSavedProfile(id) {
+  let info;
+  try {
+    const res = await fetch('/api/vault/' + id + '/use');
+    if (!res.ok) throw Error();
+    info = await res.json();
+  } catch { toast('Could not load the saved profile.'); return; }
+  if (info.broker === 'angel-one') {
+    $('#provider').value = 'ANGEL_ONE';
+    openAngelOneDialog(info.data);
+    return;
+  }
+  const data = info.broker === 'fyers' ? { apiKey: info.data.appId, apiSecret: info.data.appSecret } : { apiKey: info.data.apiKey, apiSecret: info.data.apiSecret };
+  try {
+    const res = await fetch('/api/auth/' + info.broker + '/configure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    if (!res.ok) throw Error();
+    window.location.assign('/api/auth/' + info.broker + '/start');
+  } catch { toast('Could not reuse the saved profile.'); }
+}
+async function saveProfileToVault(brokerSlug, data) {
+  if (!account.loggedIn) return;
+  const name = $('#vaultSaveName').value.trim();
+  if (!name) return;
+  try {
+    const res = await fetch('/api/vault', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ broker: brokerSlug, name, data }) });
+    if (!res.ok) throw Error();
+    $('#vaultSaveName').value = '';
+    await refreshAccount();
+    toast('Credentials saved for reuse.');
+  } catch { toast('Could not save the credentials for reuse.'); }
+}
+function populateBrokerSavedSelect(brokerSlug, showSaveRow) {
+  const select = $('#brokerSavedProfiles');
+  const saveRow = document.querySelector('.dialog-save-row');
+  const profiles = account.profiles.filter(p => p.broker === brokerSlug);
+  $('#brokerSavedSection').style.display = profiles.length ? 'block' : 'none';
+  saveRow.style.display = showSaveRow ? 'block' : 'none';
+  select.innerHTML = '<option value="">Select a saved profile…</option>' + profiles.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+  select.onchange = async () => {
+    if (!select.value) return;
+    try {
+      const res = await fetch('/api/vault/' + select.value + '/use');
+      if (!res.ok) throw Error();
+      applySavedProfile(brokerSlug, (await res.json()).data);
+    } catch { toast('Could not load the saved profile.'); }
+  };
+}
+function applySavedProfile(brokerSlug, data) {
+  if (brokerSlug === 'angel-one') {
+    $('#brokerAngelApiKey').value = data.apiKey || '';
+    $('#brokerClientCode').value = data.clientCode || '';
+    $('#brokerPin').value = data.pin || '';
+    $('#brokerTotp').focus();
+  } else if (brokerSlug === 'zerodha') {
+    $('#brokerApiKey').value = data.apiKey || '';
+    $('#brokerApiSecret').value = data.apiSecret || '';
+  } else if (brokerSlug === 'upstox') {
+    $('#brokerUpstoxApiKey').value = data.apiKey || '';
+    $('#brokerUpstoxApiSecret').value = data.apiSecret || '';
+  } else if (brokerSlug === 'fyers') {
+    $('#brokerFyersAppId').value = data.appId || '';
+    $('#brokerFyersAppSecret').value = data.appSecret || '';
+  }
+}
+async function openAngelOneDialog(prefill) {
+  try {
+    const status = await (await fetch('/api/auth/angel-one/status')).json();
+    if (status.connected) { toast('Angel One is already connected.'); return; }
+    const needsFull = !status.hasCredentials;
+    const dialog = document.getElementById('brokerDialog');
+    document.getElementById('brokerDialogTitle').textContent = 'Connect Angel One';
+    document.getElementById('brokerDialogText').textContent = needsFull ? 'Enter your SmartAPI key and Angel One credentials.' : 'Enter your current TOTP to reconnect.';
+    document.getElementById('brokerAngelCredentials').style.display = needsFull ? 'block' : 'none';
+    document.getElementById('brokerFieldsZerodha').style.display = 'none';
+    document.getElementById('brokerFieldsAngel').style.display = 'block';
+    document.getElementById('brokerFieldsUpstox').style.display = 'none';
+    document.getElementById('brokerFieldsFyers').style.display = 'none';
+    document.getElementById('brokerDialogFields').style.display = 'block';
+    $('#brokerAngelApiKey').value = prefill?.apiKey || '';
+    $('#brokerClientCode').value = prefill?.clientCode || '';
+    $('#brokerPin').value = prefill?.pin || '';
+    $('#brokerTotp').value = '';
+    populateBrokerSavedSelect('angel-one', needsFull);
+    document.getElementById('brokerDialogContinue').onclick = async () => {
+      const apiKey = $('#brokerAngelApiKey').value.trim();
+      const clientCode = $('#brokerClientCode').value.trim();
+      const pin = $('#brokerPin').value.trim();
+      const totp = $('#brokerTotp').value.trim();
+      if (!/^\d{6}$/.test(totp)) { toast('TOTP must be a 6-digit code.'); return; }
+      if (needsFull && (!apiKey || !clientCode || !pin)) { toast('All fields are required.'); return; }
+      dialog.close();
+      document.getElementById('brokerDialogFields').style.display = 'none';
+      document.getElementById('brokerFieldsAngel').style.display = 'none';
+      try {
+        const res = await fetch('/api/auth/angel-one/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey, clientCode, pin, totp }) });
+        if (!res.ok) throw Error((await res.json()).message);
+        await saveProfileToVault('angel-one', { apiKey, clientCode, pin });
+        toast('Angel One connected.');
+      } catch (e) { toast(e.message || 'Angel One connection failed.'); }
+    };
+    dialog.showModal();
+  } catch { toast('Could not start the Angel One connection.'); }
+}
+async function openZerodhaDialog() {
+  try {
+    const status = await (await fetch('/api/auth/zerodha/status')).json();
+    if (status.connected) { toast('Zerodha Kite Connect is already connected.'); return; }
+    if (!status.configured) {
+      const dialog = document.getElementById('brokerDialog');
+      document.getElementById('brokerDialogTitle').textContent = 'Connect Zerodha';
+      document.getElementById('brokerDialogText').textContent = 'Enter your Kite Connect API credentials from developers.kite.zerodha.com';
+      document.getElementById('brokerFieldsAngel').style.display = 'none';
+      document.getElementById('brokerFieldsZerodha').style.display = 'block';
+      document.getElementById('brokerFieldsUpstox').style.display = 'none';
+      document.getElementById('brokerFieldsFyers').style.display = 'none';
+      document.getElementById('brokerDialogFields').style.display = 'block';
+      document.getElementById('brokerApiKey').value = '';
+      document.getElementById('brokerApiSecret').value = '';
+      populateBrokerSavedSelect('zerodha', true);
+      document.getElementById('brokerDialogContinue').onclick = async () => {
+        const apiKey = document.getElementById('brokerApiKey').value.trim();
+        const apiSecret = document.getElementById('brokerApiSecret').value.trim();
+        if (!apiKey || !apiSecret) { toast('API Key and Secret are required.'); return; }
+        dialog.close();
+        document.getElementById('brokerDialogFields').style.display = 'none';
+        try {
+          const res = await fetch('/api/auth/zerodha/configure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey, apiSecret }) });
+          if (!res.ok) throw Error((await res.json()).message);
+          await saveProfileToVault('zerodha', { apiKey, apiSecret });
+          window.location.assign('/api/auth/zerodha/start');
+        } catch (e) { toast(e.message || 'Failed to configure Zerodha.'); }
+      };
+      dialog.showModal();
+      return;
+    }
+    window.location.assign('/api/auth/zerodha/start');
+  } catch { toast('Could not start the Zerodha connection.'); }
+}
+async function openOAuthDialog(provider) {
+  const slug = provider === 'UPSTOX' ? 'upstox' : 'fyers';
+  try {
+    const status = await (await fetch('/api/auth/' + slug + '/status')).json();
+    if (status.connected) { toast(provider + ' is already connected.'); return; }
+    if (status.configured) { window.location.assign('/api/auth/' + slug + '/start'); return; }
+    const isUpstox = provider === 'UPSTOX';
+    const dialog = document.getElementById('brokerDialog');
+    document.getElementById('brokerDialogTitle').textContent = 'Connect ' + (isUpstox ? 'Upstox' : 'Fyers');
+    document.getElementById('brokerDialogText').textContent = 'Enter your ' + (isUpstox ? 'Upstox' : 'Fyers') + ' API credentials.';
+    document.getElementById('brokerFieldsZerodha').style.display = 'none';
+    document.getElementById('brokerFieldsAngel').style.display = 'none';
+    document.getElementById('brokerFieldsUpstox').style.display = isUpstox ? 'block' : 'none';
+    document.getElementById('brokerFieldsFyers').style.display = isUpstox ? 'none' : 'block';
+    document.getElementById('brokerDialogFields').style.display = 'block';
+    $(isUpstox ? '#brokerUpstoxApiKey' : '#brokerFyersAppId').value = '';
+    $(isUpstox ? '#brokerUpstoxApiSecret' : '#brokerFyersAppSecret').value = '';
+    populateBrokerSavedSelect(slug, true);
+    document.getElementById('brokerDialogContinue').onclick = async () => {
+      const apiKey = $(isUpstox ? '#brokerUpstoxApiKey' : '#brokerFyersAppId').value.trim();
+      const apiSecret = $(isUpstox ? '#brokerUpstoxApiSecret' : '#brokerFyersAppSecret').value.trim();
+      if (!apiKey || !apiSecret) { toast('All fields are required.'); return; }
+      dialog.close();
+      document.getElementById('brokerDialogFields').style.display = 'none';
+      document.getElementById('brokerFieldsUpstox').style.display = 'none';
+      document.getElementById('brokerFieldsFyers').style.display = 'none';
+      try {
+        const res = await fetch('/api/auth/' + slug + '/configure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey, apiSecret }) });
+        if (!res.ok) throw Error((await res.json()).message);
+        await saveProfileToVault(slug, isUpstox ? { apiKey, apiSecret } : { appId: apiKey, appSecret: apiSecret });
+        window.location.assign('/api/auth/' + slug + '/start');
+      } catch (e) { toast(e.message || 'Failed to configure ' + slug + '.'); }
+    };
+    dialog.showModal();
+  } catch { toast('Could not start the ' + provider + ' connection.'); }
+}
 document.addEventListener('click', async event => {
   if (event.target.id !== 'connect' || $('#provider').value === 'DEMO') return;
   event.preventDefault(); event.stopImmediatePropagation();
   const provider = $('#provider').value;
-  if (provider === 'ANGEL_ONE') {
-    try {
-      const status = await (await fetch('/api/auth/angel-one/status')).json();
-      if (status.connected) { toast('Angel One is already connected.'); return; }
-      const needsFull = !status.hasCredentials;
-      document.getElementById('brokerDialogTitle').textContent = 'Connect Angel One';
-      document.getElementById('brokerDialogText').textContent = needsFull ? 'Enter your SmartAPI key and Angel One credentials.' : 'Enter your current TOTP to reconnect.';
-      document.getElementById('brokerAngelCredentials').style.display = needsFull ? 'block' : 'none';
-      document.getElementById('brokerFieldsZerodha').style.display = 'none';
-      document.getElementById('brokerFieldsAngel').style.display = 'block';
-      document.getElementById('brokerDialogFields').style.display = 'block';
-      $('#brokerAngelApiKey').value = ''; $('#brokerClientCode').value = ''; $('#brokerPin').value = ''; $('#brokerTotp').value = '';
-      const dialog = document.getElementById('brokerDialog');
-      dialog.showModal();
-      document.getElementById('brokerDialogContinue').onclick = async () => {
-        const apiKey = $('#brokerAngelApiKey').value.trim();
-        const clientCode = $('#brokerClientCode').value.trim();
-        const pin = $('#brokerPin').value.trim();
-        const totp = $('#brokerTotp').value.trim();
-        if (!/^\d{6}$/.test(totp)) { toast('TOTP must be a 6-digit code.'); return; }
-        if (needsFull && (!apiKey || !clientCode || !pin)) { toast('All fields are required.'); return; }
-        dialog.close();
-        document.getElementById('brokerDialogFields').style.display = 'none';
-        document.getElementById('brokerFieldsAngel').style.display = 'none';
-        try {
-          const res = await fetch('/api/auth/angel-one/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey, clientCode, pin, totp }) });
-          if (!res.ok) throw Error((await res.json()).message);
-          toast('Angel One connected.');
-        } catch (e) { toast(e.message || 'Angel One connection failed.'); }
-      };
-    } catch { toast('Could not start the Angel One connection.'); }
-    return;
-  }
-  if (provider === 'ZERODHA') {
-    try {
-      const status = await (await fetch('/api/auth/zerodha/status')).json();
-      if (status.connected) { toast('Zerodha Kite Connect is already connected.'); return; }
-      if (!status.configured) {
-        document.getElementById('brokerDialogTitle').textContent = 'Connect Zerodha';
-        document.getElementById('brokerDialogText').textContent = 'Enter your Kite Connect API credentials from developers.kite.zerodha.com';
-        document.getElementById('brokerFieldsAngel').style.display = 'none';
-        document.getElementById('brokerFieldsZerodha').style.display = 'block';
-        document.getElementById('brokerDialogFields').style.display = 'block';
-        document.getElementById('brokerApiKey').value = '';
-        document.getElementById('brokerApiSecret').value = '';
-        const dialog = document.getElementById('brokerDialog');
-        dialog.showModal();
-        document.getElementById('brokerDialogContinue').onclick = async () => {
-          const apiKey = document.getElementById('brokerApiKey').value.trim();
-          const apiSecret = document.getElementById('brokerApiSecret').value.trim();
-          if (!apiKey || !apiSecret) { toast('API Key and Secret are required.'); return; }
-          dialog.close();
-          document.getElementById('brokerDialogFields').style.display = 'none';
-          try {
-            const res = await fetch('/api/auth/zerodha/configure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey, apiSecret }) });
-            if (!res.ok) throw Error((await res.json()).message);
-            window.location.assign('/api/auth/zerodha/start');
-          } catch (e) { toast(e.message || 'Failed to configure Zerodha.'); }
-        };
-        return;
-      }
-      window.location.assign('/api/auth/zerodha/start');
-    } catch { toast('Could not start the Zerodha connection.'); }
-    return;
-  }
-  if (provider === 'UPSTOX' || provider === 'FYERS') {
-    try {
-      const slug = provider === 'UPSTOX' ? 'upstox' : 'fyers';
-      const status = await (await fetch('/api/auth/' + slug + '/status')).json();
-      if (status.connected) { toast(provider + ' is already connected.'); return; }
-      if (status.configured) { window.location.assign('/api/auth/' + slug + '/start'); return; }
-      const isUpstox = provider === 'UPSTOX';
-      document.getElementById('brokerDialogTitle').textContent = 'Connect ' + (isUpstox ? 'Upstox' : 'Fyers');
-      document.getElementById('brokerDialogText').textContent = 'Enter your ' + (isUpstox ? 'Upstox' : 'Fyers') + ' API credentials.';
-      document.getElementById('brokerFieldsZerodha').style.display = 'none';
-      document.getElementById('brokerFieldsAngel').style.display = 'none';
-      document.getElementById('brokerFieldsUpstox').style.display = isUpstox ? 'block' : 'none';
-      document.getElementById('brokerFieldsFyers').style.display = isUpstox ? 'none' : 'block';
-      document.getElementById('brokerDialogFields').style.display = 'block';
-      $(isUpstox ? '#brokerUpstoxApiKey' : '#brokerFyersAppId').value = '';
-      $(isUpstox ? '#brokerUpstoxApiSecret' : '#brokerFyersAppSecret').value = '';
-      const dialog = document.getElementById('brokerDialog');
-      dialog.showModal();
-      document.getElementById('brokerDialogContinue').onclick = async () => {
-        const apiKey = $(isUpstox ? '#brokerUpstoxApiKey' : '#brokerFyersAppId').value.trim();
-        const apiSecret = $(isUpstox ? '#brokerUpstoxApiSecret' : '#brokerFyersAppSecret').value.trim();
-        if (!apiKey || !apiSecret) { toast('All fields are required.'); return; }
-        dialog.close();
-        document.getElementById('brokerDialogFields').style.display = 'none';
-        document.getElementById('brokerFieldsUpstox').style.display = 'none';
-        document.getElementById('brokerFieldsFyers').style.display = 'none';
-        try {
-          const res = await fetch('/api/auth/' + slug + '/configure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey, apiSecret }) });
-          if (!res.ok) throw Error((await res.json()).message);
-          window.location.assign('/api/auth/' + slug + '/start');
-        } catch (e) { toast(e.message || 'Failed to configure ' + slug + '.'); }
-      };
-    } catch { toast('Could not start the ' + provider + ' connection.'); }
-    return;
-  }
+  if (provider === 'ANGEL_ONE') { openAngelOneDialog(); return; }
+  if (provider === 'ZERODHA') { openZerodhaDialog(); return; }
+  if (provider === 'UPSTOX' || provider === 'FYERS') { openOAuthDialog(provider); return; }
   const broker = provider.toLowerCase();
   try {
     const status = await (await fetch('/api/auth/' + broker + '/status')).json();
@@ -682,13 +894,42 @@ document.addEventListener('click', async event => {
     toast($('#provider option:checked').textContent + ' is not configured on this server.');
   } catch { toast('Could not start the ' + $('#provider option:checked').textContent + ' connection.'); }
 }, true);
-$('#sidebarToggle').addEventListener('click', () => {
-  const main = document.querySelector('main'), hidden = main.classList.toggle('sidebar-hidden');
-  const toggle = $('#sidebarToggle');
-  toggle.setAttribute('aria-expanded', String(!hidden));
-  toggle.setAttribute('aria-label', hidden ? 'Show controls' : 'Hide controls');
-  toggle.title = hidden ? 'Show controls' : 'Hide controls';
-  toggle.textContent = hidden ? '☷' : '☰';
-  setTimeout(() => chart?.applyOptions({ width: $('#chart').clientWidth }), 0);
-});
+const CHART_THEMES = {
+  dark: { bg: '#0c1014', text: '#82919d', grid: '#172129', border: '#26313a', crosshair: '#4f6570' },
+  light: { bg: '#ffffff', text: '#5f6f7c', grid: '#e6ebef', border: '#d5dce3', crosshair: '#9aa8b3' }
+};
+const currentTheme = () => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+const lineColor = () => currentTheme() === 'light' ? '#0e9d94' : '#47d7d1';
+function applyChartTheme() {
+  if (!chart) return;
+  const t = CHART_THEMES[currentTheme()];
+  chart.applyOptions({
+    layout: { background: { color: t.bg }, textColor: t.text },
+    grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+    rightPriceScale: { borderColor: t.border },
+    timeScale: { borderColor: t.border },
+    crosshair: { vertLine: { color: t.crosshair }, horzLine: { color: t.crosshair } }
+  });
+}
+function initTheme() {
+  const saved = localStorage.getItem('prism.theme') || 'dark';
+  document.documentElement.dataset.theme = saved === 'light' ? 'light' : 'dark';
+  const toggle = $('#themeToggle');
+  if (!toggle) return;
+  const light = currentTheme() === 'light';
+  toggle.textContent = light ? '☾' : '☀';
+  toggle.setAttribute('aria-label', light ? 'Switch to dark theme' : 'Switch to light theme');
+  toggle.title = light ? 'Switch to dark theme' : 'Switch to light theme';
+  toggle.addEventListener('click', () => {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem('prism.theme', next);
+    const isLight = next === 'light';
+    toggle.textContent = isLight ? '☾' : '☀';
+    toggle.setAttribute('aria-label', isLight ? 'Switch to dark theme' : 'Switch to light theme');
+    toggle.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
+    applyChartTheme();
+    setSeries();
+  });
+}
 setup();
