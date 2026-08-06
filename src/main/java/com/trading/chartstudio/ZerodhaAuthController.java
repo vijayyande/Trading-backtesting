@@ -61,7 +61,8 @@ public class ZerodhaAuthController {
         requireConfiguration(session);
         String state = randomState();
         session.setAttribute("zerodha.oauth-state", state);
-        String loginUrl = "https://kite.zerodha.com/connect/login?v=3&api_key=" + encode(resolveApiKey(session));
+        String callback = appUrl + "/api/auth/zerodha/callback";
+        String loginUrl = "https://kite.zerodha.com/connect/login?v=3&api_key=" + encode(resolveApiKey(session)) + "&redirect_uri=" + encode(callback);
         return ResponseEntity.status(302).location(URI.create(loginUrl)).build();
     }
 

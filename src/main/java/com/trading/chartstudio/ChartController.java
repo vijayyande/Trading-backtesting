@@ -509,6 +509,8 @@ public class ChartController {
             return ResponseEntity.badRequest().body("Unknown provider or interval");
         }
         if (!"DEMO".equals(safeProvider)) {
+            Candle live = brokerCandleService.fetchLiveQuote(safeProvider, symbol, interval, 2, session);
+            if (live != null) return ResponseEntity.ok(live);
             List<Candle> history = brokerCandleService.fetchCandles(safeProvider, symbol, interval, 2, session);
             if (history != null && !history.isEmpty()) {
                 Candle last = history.getLast();

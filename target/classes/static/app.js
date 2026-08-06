@@ -5,7 +5,9 @@ const COLORS = ['#47d7d1', '#f1bd56', '#b88cff', '#f27675', '#75b9ff', '#9bdc71'
 let chart, mainSeries, candles = [], interval = '1d', chartType = 'candlestick', active = [], liveTimer, loadingMore = false, backtestRuns = [], customStrategies = new Map(), customDraft = { entryConditions: [], exitConditions: [], stopLoss: 0 };
 let account = { loggedIn: false, username: '', profiles: [] }, accountMode = 'login';
 let indicatorPane = 0;
+let indicatorPresets = {};
 let mainMarkers = null;
+let drawings = [], drawMode = 'select', drawColor = '#47d7d1', selectedDrawing = null, drawingDraft = null, dragState = null, drawingSeq = 0;
 const intervalSeconds = () => ({ '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 }[interval] || 86400);
 const INDICATOR_PARAMS = {
   BB: [['period', 'Period', 20], ['std', 'Std dev', 2]], KC: [['period', 'EMA', 20], ['mult', 'ATR mult', 2]], DC: [['period', 'Period', 20]], ENVELOPE: [['period', 'Period', 20], ['percent', 'Width %', 2.5]],
@@ -84,6 +86,7 @@ function setSeries() {
     : { upColor: '#55c99d', downColor: '#e66e70', borderUpColor: '#55c99d', borderDownColor: '#e66e70', wickUpColor: '#55c99d', wickDownColor: '#e66e70' };
   mainSeries = chartType === 'line' ? chart.addSeries(LightweightCharts.LineSeries, config) : chartType === 'bar' ? chart.addSeries(LightweightCharts.BarSeries, config) : chart.addSeries(LightweightCharts.CandlestickSeries, config);
   mainMarkers = null;
+  attachDrawings();
   render();
 }
 function pointData(values) { return values.map((value, i) => value == null || !Number.isFinite(value) ? null : ({ time: candles[i].time / 1000, value })).filter(Boolean); }
@@ -100,6 +103,499 @@ function setMainMarkers(markers) {
   if (!chart || !mainSeries) return;
   if (!mainMarkers) mainMarkers = LightweightCharts.createSeriesMarkers(mainSeries, []);
   mainMarkers.setMarkers(markers || []);
+}
+/* ---- Annotations & drawings ---- */
+const PATTERN_INFO = {
+  rectangle: { name: 'Rectangle', points: 2 }, triangle: { name: 'Symmetrical Triangle', points: 3 }, ascTri: { name: 'Ascending Triangle', points: 3 }, descTri: { name: 'Descending Triangle', points: 3 },
+  risingWedge: { name: 'Rising Wedge', points: 4 }, fallingWedge: { name: 'Falling Wedge', points: 4 },
+  bullFlag: { name: 'Bullish Flag', points: 4 }, bearFlag: { name: 'Bearish Flag', points: 4 },
+  bullPennant: { name: 'Bullish Pennant', points: 4 }, bearPennant: { name: 'Bearish Pennant', points: 4 },
+  headShoulders: { name: 'Head & Shoulders', points: 4 }, invHeadShoulders: { name: 'Inverse Head & Shoulders', points: 4 },
+  doubleTop: { name: 'Double Top', points: 3 }, doubleBottom: { name: 'Double Bottom', points: 3 },
+  tripleTop: { name: 'Triple Top', points: 4 }, tripleBottom: { name: 'Triple Bottom', points: 4 },
+  cupHandle: { name: 'Cup & Handle', points: 3 }
+};
+const DRAW_TOOL_POINTS = { trendline: 2, fib: 2, channel: 3, ray: 2, measure: 2, area: 2 };
+Object.keys(PATTERN_INFO).forEach(k => DRAW_TOOL_POINTS[k] = PATTERN_INFO[k].points);
+const DRAW_FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+function drawingCoord(d, time, price) {
+  const ctx = d._ctx;
+  if (!ctx) return null;
+  const x = ctx.chart.timeScale().timeToCoordinate(time);
+  const y = ctx.series.priceToCoordinate(price);
+  if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+function drawingPoints(d) { return d.cursor ? d.points.concat(d.cursor) : d.points; }
+function pointCoord(d, p, index) { const c = drawingCoord(d, p.time, p.price); return c ? { x: c.x, y: c.y, index } : { x: null, y: null, index }; }
+function drawingHandlePoints(d) {
+  const pts = drawingPoints(d);
+  const out = [];
+  if (d.type === 'trendline' || d.type === 'fib') { if (pts[0]) out.push(pointCoord(d, pts[0], 0)); if (pts[1]) out.push(pointCoord(d, pts[1], 1)); }
+  else if (d.type === 'channel') { for (let i = 0; i < 3; i++) if (pts[i]) out.push(pointCoord(d, pts[i], i)); }
+  else if (d.type === 'text') { if (pts[0]) out.push(pointCoord(d, pts[0], 0)); }
+  else if (d.type === 'ray' || d.type === 'measure' || d.type === 'area') { if (pts[0]) out.push(pointCoord(d, pts[0], 0)); if (pts[1]) out.push(pointCoord(d, pts[1], 1)); }
+  else if (d.type === 'arrowUp' || d.type === 'arrowDown' || d.type === 'target') { if (pts[0]) out.push(pointCoord(d, pts[0], 0)); }
+  else if (PATTERN_INFO[d.type]) { for (let i = 0; i < pts.length; i++) if (pts[i]) out.push(pointCoord(d, pts[i], i)); }
+  return out.filter(c => c.x != null && c.y != null);
+}
+function requestDrawingUpdate(d) { try { if (d && d._ctx && d._ctx.requestUpdate) d._ctx.requestUpdate(); } catch (err) { } }
+function refreshDrawings() { drawings.forEach(requestDrawingUpdate); if (drawingDraft) requestDrawingUpdate(drawingDraft); }
+function drawingPrimitive(d) {
+  const view = {
+    zOrder: () => 'top',
+    renderer: () => ({ draw: target => { try { drawDrawingShape(d, target); } catch (err) { } } })
+  };
+  return {
+    attached(param) { d._ctx = { chart: param.chart, series: param.series, requestUpdate: param.requestUpdate }; },
+    detached() { d._ctx = null; },
+    updateAllViews() { },
+    paneViews() { return [view]; }
+  };
+}
+function drawDrawingShape(d, target) {
+  if (!d._ctx) return;
+  const pts = drawingPoints(d);
+  if (!pts.length) return;
+  const sel = selectedDrawing && selectedDrawing.id === d.id;
+  target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+    const ctx = context, w = mediaSize.width, h = mediaSize.height;
+    const to = p => p && drawingCoord(d, p.time, p.price);
+    const strokeLine = (a, b) => { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); };
+    const handle = p => { const c = to(p); if (!c) return; ctx.beginPath(); ctx.arc(c.x, c.y, sel ? 5 : 4, 0, Math.PI * 2); ctx.fillStyle = d.color; ctx.fill(); ctx.strokeStyle = sel ? '#ffffff' : 'rgba(0,0,0,.55)'; ctx.lineWidth = 1.4; ctx.stroke(); };
+    const label = (text, x, y, align) => { ctx.font = '10px "DM Mono", monospace'; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle'; const tw = ctx.measureText(text).width; let bx; if (align === 'right') bx = x - tw - 8; else if (align === 'center') bx = x - tw / 2 - 5; else bx = x; ctx.fillStyle = 'rgba(12,16,20,.75)'; ctx.fillRect(bx, y - 9, tw + 10, 18); ctx.fillStyle = d.color; ctx.fillText(text, align === 'right' ? x - 5 : align === 'center' ? x : x + 5, y); };
+    ctx.strokeStyle = d.color; ctx.fillStyle = d.color; ctx.lineWidth = sel ? 2 : 1.4;
+    if (d.type === 'trendline') {
+      const a = to(pts[0]), b = to(pts[1]);
+      if (a && b) { strokeLine(a, b); handle(pts[0]); handle(pts[1]); }
+      else if (a) handle(pts[0]);
+    } else if (d.type === 'horizline') {
+      const y = d._ctx.series.priceToCoordinate(pts[0].price);
+      if (y == null) return;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      if (sel) { ctx.beginPath(); ctx.arc(w - 8, y, 4, 0, Math.PI * 2); ctx.fill(); }
+      label(String(Number(pts[0].price).toFixed(2)), w, y, 'right');
+    } else if (d.type === 'vertline') {
+      const x = d._ctx.chart.timeScale().timeToCoordinate(pts[0].time);
+      if (x == null) return;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+      if (sel) { ctx.beginPath(); ctx.arc(x, 10, 4, 0, Math.PI * 2); ctx.fill(); }
+      label(new Date(pts[0].time * 1000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }), x, 12, 'left');
+    } else if (d.type === 'fib') {
+      const a = to(pts[0]), b = to(pts[1]);
+      if (!a || !b) return;
+      const from = pts[0].price, span = pts[1].price - from;
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath(); ctx.moveTo(a.x, 0); ctx.lineTo(a.x, h); ctx.moveTo(b.x, 0); ctx.lineTo(b.x, h); ctx.stroke();
+      ctx.setLineDash([]);
+      DRAW_FIB_LEVELS.forEach(lv => {
+        const price = from + span * lv;
+        const c = d._ctx.series.priceToCoordinate(price);
+        if (c == null) return;
+        ctx.beginPath(); ctx.moveTo(0, c); ctx.lineTo(w, c); ctx.stroke();
+        label(`${(lv * 100).toFixed(1)}%  ${Number(price).toFixed(2)}`, w, c, 'right');
+      });
+      handle(pts[0]); handle(pts[1]);
+    } else if (d.type === 'channel') {
+      const a = to(pts[0]), b = to(pts[1]), c = to(pts[2]);
+      if (a && b) {
+        strokeLine(a, b);
+        const dx = pts[1].time - pts[0].time, dp = pts[1].price - pts[0].price;
+        const cpt = pts[2] || { time: pts[0].time, price: pts[0].price };
+        const cCoord = c || to(cpt);
+        const end = to({ time: cpt.time + dx, price: cpt.price + dp });
+        if (cCoord && end) strokeLine(cCoord, end);
+      }
+      if (a) handle(pts[0]);
+      if (b) handle(pts[1]);
+      if (pts[2]) handle(pts[2]);
+    } else if (d.type === 'text') {
+      const a = to(pts[0]);
+      if (!a) return;
+      const text = String(d.text || '');
+      ctx.font = '11px Manrope, sans-serif';
+      const lines = text.split('\n'), lh = 16;
+      const tw = Math.max(1, ...lines.map(l => ctx.measureText(l).width));
+      const bx = a.x + 8, by = a.y - 12, bw = tw + 14, bh = lines.length * lh + 10;
+      ctx.fillStyle = 'rgba(12,16,20,.8)';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = d.color; ctx.lineWidth = 1; ctx.strokeRect(bx, by, bw, bh);
+      ctx.fillStyle = d.color; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+      lines.forEach((ln, i) => ctx.fillText(ln, bx + 7, by + 6 + i * lh));
+      handle(pts[0]);
+    } else if (d.type === 'arrowUp' || d.type === 'arrowDown') {
+      const c = to(pts[0]);
+      if (!c) return;
+      const dir = d.type === 'arrowUp' ? -1 : 1, len = 16;
+      ctx.strokeStyle = d.color; ctx.fillStyle = d.color; ctx.lineWidth = 2; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(c.x, c.y + dir * len); ctx.lineTo(c.x, c.y - dir * len); ctx.stroke();
+      const headY = c.y - dir * len, wingY = headY + (dir === -1 ? 7 : -7);
+      ctx.beginPath(); ctx.moveTo(c.x, headY); ctx.lineTo(c.x - 5, wingY); ctx.lineTo(c.x + 5, wingY); ctx.closePath(); ctx.fill();
+      ctx.lineCap = 'butt';
+      handle(pts[0]);
+    } else if (d.type === 'target') {
+      const c = to(pts[0]);
+      if (!c) return;
+      ctx.strokeStyle = d.color; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(c.x, c.y, 9, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(c.x, c.y, 3.5, 0, Math.PI * 2); ctx.fillStyle = d.color; ctx.fill();
+      ctx.beginPath(); ctx.moveTo(c.x - 13, c.y); ctx.lineTo(c.x + 13, c.y); ctx.moveTo(c.x, c.y - 13); ctx.lineTo(c.x, c.y + 13); ctx.stroke();
+      label(String(Number(pts[0].price).toFixed(2)), c.x + 14, c.y, 'left');
+      handle(pts[0]);
+    } else if (d.type === 'ray') {
+      const a = to(pts[0]), b = to(pts[1]);
+      if (!a || !b) return;
+      const t0 = pts[0].time, t1 = pts[1].time;
+      const tEnd = d._ctx.chart.timeScale().coordinateToTime(w);
+      if (tEnd == null || t1 === t0) return;
+      const pEnd = pts[1].price + (pts[1].price - pts[0].price) * ((tEnd - t1) / (t1 - t0));
+      const end = drawingCoord(d, tEnd, pEnd);
+      if (end) strokeLine(a, end);
+      handle(pts[0]); handle(pts[1]);
+    } else if (d.type === 'measure') {
+      const a = to(pts[0]), b = to(pts[1]);
+      if (!a || !b) return;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(a.x, b.y); ctx.moveTo(b.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(a.x, a.y, 3, 0, Math.PI * 2); ctx.fillStyle = d.color; ctx.fill();
+      ctx.beginPath(); ctx.arc(b.x, b.y, 3, 0, Math.PI * 2); ctx.fillStyle = d.color; ctx.fill();
+      const dp = pts[1].price - pts[0].price, dt = Math.abs(Math.round((pts[1].time - pts[0].time) / 86400));
+      label(`${dp >= 0 ? '+' : ''}${Number(dp).toFixed(2)}  ·  ${dt}d`, (a.x + b.x) / 2, Math.min(a.y, b.y) - 12, 'center');
+      handle(pts[0]); handle(pts[1]);
+    } else if (d.type === 'area') {
+      const a = to(pts[0]), b = to(pts[1]);
+      if (!a || !b) return;
+      const t0 = Math.min(pts[0].time, pts[1].time), t1 = Math.max(pts[0].time, pts[1].time);
+      const p0 = Math.min(pts[0].price, pts[1].price), p1 = Math.max(pts[0].price, pts[1].price);
+      const tl = drawingCoord(d, t0, p1), br = drawingCoord(d, t1, p0);
+      if (!tl || !br) return;
+      ctx.globalAlpha = 0.18; ctx.fillStyle = d.color;
+      ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+      ctx.globalAlpha = 1; ctx.lineWidth = 1.2;
+      ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+      handle(pts[0]); handle(pts[1]);
+    } else if (PATTERN_INFO[d.type]) {
+      renderPatternShape(d, ctx, w, h, { to, handle, label, sel });
+    }
+  });
+}
+function drawingBodyHit(d, pt) {
+  const pts = drawingPoints(d);
+  const to = p => p && drawingCoord(d, p.time, p.price);
+  const distToSegment = (a, b) => {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const t = Math.max(0, Math.min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(pt.x - (a.x + t * dx), pt.y - (a.y + t * dy));
+  };
+  if (d.type === 'trendline') { const a = to(pts[0]), b = to(pts[1]); return !!(a && b && distToSegment(a, b) < 6); }
+  if (d.type === 'channel') {
+    const a = to(pts[0]), b = to(pts[1]), c = to(pts[2]);
+    if (a && b && distToSegment(a, b) < 6) return true;
+    if (a && b && c) { const dx = pts[1].time - pts[0].time, dp = pts[1].price - pts[0].price; const end = to({ time: pts[2].time + dx, price: pts[2].price + dp }); return !!(end && distToSegment(c, end) < 6); }
+    return false;
+  }
+  if (d.type === 'horizline') { const y = d._ctx && d._ctx.series.priceToCoordinate(pts[0].price); return y != null && Math.abs(pt.y - y) < 6; }
+  if (d.type === 'vertline') { const x = d._ctx && d._ctx.chart.timeScale().timeToCoordinate(pts[0].time); return x != null && Math.abs(pt.x - x) < 6; }
+  if (d.type === 'fib') {
+    const a = to(pts[0]), b = to(pts[1]);
+    if (!a || !b || !d._ctx) return false;
+    const from = pts[0].price, span = pts[1].price - from;
+    return DRAW_FIB_LEVELS.some(lv => { const c = d._ctx.series.priceToCoordinate(from + span * lv); return c != null && Math.abs(pt.y - c) < 6; });
+  }
+  if (d.type === 'text') {
+    const a = to(pts[0]);
+    if (!a) return false;
+    const text = String(d.text || '');
+    const tw = Math.max(10, Math.max(...text.split('\n').map(l => l.length)) * 6.6);
+    const th = text.split('\n').length * 16 + 10;
+    return pt.x >= a.x + 8 - 4 && pt.x <= a.x + 8 + tw + 4 && pt.y >= a.y - 12 - 4 && pt.y <= a.y - 12 + th + 4;
+  }
+  if (d.type === 'arrowUp' || d.type === 'arrowDown' || d.type === 'target') {
+    const c = to(pts[0]);
+    return !!(c && Math.hypot(pt.x - c.x, pt.y - c.y) < 14);
+  }
+  if (d.type === 'ray') {
+    const a = to(pts[0]), b = to(pts[1]);
+    if (!a || !b) return false;
+    const span = pts[1].time - pts[0].time || 86400;
+    const end = drawingCoord(d, pts[1].time + span * 10, pts[1].price + (pts[1].price - pts[0].price) * 10);
+    return !!(end && distToSegment(a, end) < 6);
+  }
+  if (d.type === 'measure') {
+    const a = to(pts[0]), b = to(pts[1]);
+    return !!(a && b && distToSegment(a, b) < 6);
+  }
+  if (d.type === 'area') {
+    const a = to(pts[0]), b = to(pts[1]);
+    if (!a || !b) return false;
+    const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+    return pt.x >= x0 - 4 && pt.x <= x1 + 4 && pt.y >= y0 - 4 && pt.y <= y1 + 4;
+  }
+  if (PATTERN_INFO[d.type]) {
+    const g = patternGeometry(d);
+    return g.segments.some(seg => { const a = to(seg.a), b = to(seg.b); return !!(a && b && distToSegment(a, b) < 6); });
+  }
+  return false;
+}
+function hitTestDrawing(pt) {
+  for (let i = drawings.length - 1; i >= 0; i--) {
+    const d = drawings[i];
+    const handles = drawingHandlePoints(d);
+    for (let hi = 0; hi < handles.length; hi++) {
+      if (Math.hypot(pt.x - handles[hi].x, pt.y - handles[hi].y) < 9) return { drawing: d, handle: handles[hi].index };
+    }
+    if (drawingBodyHit(d, pt)) return { drawing: d, handle: 0 };
+  }
+  return null;
+}
+function attachPrimitiveTo(d) {
+  if (!mainSeries) return;
+  if (d._primitive) { try { mainSeries.detachPrimitive(d._primitive); } catch (err) { } }
+  d._primitive = drawingPrimitive(d);
+  mainSeries.attachPrimitive(d._primitive);
+}
+function attachDrawings() { drawings.forEach(attachPrimitiveTo); }
+function addDrawing(partial) {
+  const drawing = Object.assign({ id: ++drawingSeq, color: drawColor }, partial);
+  drawings.push(drawing);
+  attachPrimitiveTo(drawing);
+  requestDrawingUpdate(drawing);
+  saveDrawings();
+  return drawing;
+}
+function removeDrawing(drawing) {
+  try { if (drawing._primitive && mainSeries) mainSeries.detachPrimitive(drawing._primitive); } catch (err) { }
+  drawings = drawings.filter(x => x.id !== drawing.id);
+  if (selectedDrawing && selectedDrawing.id === drawing.id) selectedDrawing = null;
+  saveDrawings(); updateDrawingToolbar(); refreshDrawings();
+}
+function clearAllDrawings() {
+  drawings.forEach(d => { try { if (d._primitive && mainSeries) mainSeries.detachPrimitive(d._primitive); } catch (err) { } });
+  drawings = []; drawingDraft = null; selectedDrawing = null;
+  saveDrawings(); updateDrawingToolbar(); refreshDrawings();
+}
+function cancelDraft() {
+  if (!drawingDraft) return;
+  try { if (drawingDraft._primitive && mainSeries) mainSeries.detachPrimitive(drawingDraft._primitive); } catch (err) { }
+  drawingDraft = null;
+}
+function finalizeDraft(points) {
+  const draft = drawingDraft;
+  cancelDraft();
+  addDrawing({ type: draft.type, points });
+}
+function saveDrawings() {
+  try { localStorage.setItem('prism.drawings', JSON.stringify(drawings.map(d => ({ id: d.id, type: d.type, color: d.color, points: d.points, text: d.text })))); } catch (err) { }
+}
+function restoreDrawings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('prism.drawings') || '[]');
+    drawings = (Array.isArray(saved) ? saved : []).map(d => ({ id: ++drawingSeq, type: d.type, color: d.color || drawColor, points: (d.points || []).filter(p => p && Number.isFinite(p.time) && Number.isFinite(p.price)), text: d.text })).filter(d => d.points.length);
+  } catch (err) { drawings = []; }
+  attachDrawings();
+  updateDrawingToolbar();
+}
+function chartPointFromEvent(e) {
+  const rect = $('#chart').getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const time = chart && chart.timeScale().coordinateToTime(x);
+  const price = mainSeries && mainSeries.coordinateToPrice(y);
+  return { x, y, time, price };
+}
+function onChartMouseDown(e) {
+  if (e.button !== 0) return;
+  const pt = chartPointFromEvent(e);
+  if (pt.time == null || pt.price == null) return;
+  if (drawMode !== 'select') {
+    e.preventDefault(); e.stopImmediatePropagation();
+    const need = DRAW_TOOL_POINTS[drawMode];
+    if (need) {
+      if (!drawingDraft) { drawingDraft = { type: drawMode, color: drawColor, points: [], cursor: pt }; attachPrimitiveTo(drawingDraft); }
+      drawingDraft.points.push({ time: pt.time, price: pt.price });
+      drawingDraft.cursor = { time: pt.time, price: pt.price };
+      requestDrawingUpdate(drawingDraft);
+      if (drawingDraft.points.length >= need) finalizeDraft(drawingDraft.points.slice(0, need));
+    } else if (drawMode === 'text') {
+      const text = window.prompt('Annotation text:', '');
+      if (text != null && text.trim()) addDrawing({ type: 'text', points: [{ time: pt.time, price: pt.price }], text: text.trim() });
+    } else {
+      addDrawing({ type: drawMode, points: [{ time: pt.time, price: pt.price }] });
+    }
+  } else {
+    const hit = hitTestDrawing(pt);
+    if (hit) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      selectedDrawing = hit.drawing;
+      dragState = { id: hit.drawing.id, handle: hit.handle };
+      updateDrawingToolbar(); refreshDrawings();
+    } else {
+      selectedDrawing = null;
+      updateDrawingToolbar(); refreshDrawings();
+    }
+  }
+}
+function onChartMouseMove(e) {
+  if (dragState) {
+    e.preventDefault(); e.stopImmediatePropagation();
+    const d = drawings.find(x => x.id === dragState.id);
+    const pt = chartPointFromEvent(e);
+    if (d && d.points[dragState.handle] && pt.time != null && pt.price != null) {
+      d.points[dragState.handle].time = pt.time;
+      d.points[dragState.handle].price = pt.price;
+      requestDrawingUpdate(d); saveDrawings();
+    }
+  } else if (drawingDraft && DRAW_TOOL_POINTS[drawingDraft.type]) {
+    const pt = chartPointFromEvent(e);
+    if (pt.time != null && pt.price != null) { drawingDraft.cursor = { time: pt.time, price: pt.price }; requestDrawingUpdate(drawingDraft); }
+  }
+}
+function onChartMouseUp() { dragState = null; }
+function onChartDblClick(e) {
+  const pt = chartPointFromEvent(e);
+  if (pt.time == null || pt.price == null) return;
+  const hit = hitTestDrawing(pt);
+  if (hit && hit.drawing.type === 'text') {
+    const text = window.prompt('Edit annotation:', hit.drawing.text);
+    if (text != null) { hit.drawing.text = text.trim() || 'Note'; requestDrawingUpdate(hit.drawing); saveDrawings(); }
+  }
+}
+function updateDrawingToolbar() {
+  const del = $('#deleteDrawing');
+  if (del) del.disabled = !selectedDrawing;
+}
+function updateDrawHint() {
+  const hint = $('#drawHint');
+  if (!hint) return;
+  if (drawMode === 'select') hint.textContent = 'Select / edit: click a drawing, drag its handles, Del to delete';
+  else if (PATTERN_INFO[drawMode]) hint.textContent = `${PATTERN_INFO[drawMode].name}: click ${PATTERN_INFO[drawMode].points} points`;
+  else if (drawMode === 'text') hint.textContent = 'Text: click to place an annotation';
+  else if (drawMode === 'arrowUp') hint.textContent = 'Up arrow: click a point';
+  else if (drawMode === 'arrowDown') hint.textContent = 'Down arrow: click a point';
+  else if (drawMode === 'target') hint.textContent = 'Price target: click a point';
+  else if (drawMode === 'horizline' || drawMode === 'vertline') hint.textContent = `${drawMode === 'horizline' ? 'Horizontal' : 'Vertical'} line: click 1 point`;
+  else hint.textContent = `${({ trendline: 'Trend line', fib: 'Fibonacci', channel: 'Channel', ray: 'Ray', measure: 'Measure', area: 'Area' })[drawMode] || 'Drawing'}: click ${DRAW_TOOL_POINTS[drawMode] || 2} points`;
+}
+function setupDrawingTools() {
+  $$('.drawing-tools [data-tool]').forEach(btn => {
+    btn.onclick = () => {
+      drawMode = btn.dataset.tool;
+      cancelDraft(); dragState = null;
+      const ps = $('#patternTool');
+      if (ps) ps.value = '';
+      $$('.drawing-tools [data-tool]').forEach(b => b.classList.toggle('active', b === btn));
+      updateDrawHint();
+    };
+  });
+  const patternSelect = $('#patternTool');
+  if (patternSelect) {
+    patternSelect.onchange = () => {
+      drawMode = patternSelect.value || 'select';
+      cancelDraft(); dragState = null;
+      $$('.drawing-tools [data-tool]').forEach(b => b.classList.remove('active'));
+      updateDrawHint();
+    };
+  }
+  const colorInput = $('#drawColor');
+  if (colorInput) {
+    colorInput.value = drawColor;
+    colorInput.oninput = e => { drawColor = e.target.value; if (selectedDrawing) { selectedDrawing.color = drawColor; saveDrawings(); requestDrawingUpdate(selectedDrawing); } };
+  }
+  $('#deleteDrawing').onclick = () => { if (selectedDrawing) removeDrawing(selectedDrawing); };
+  $('#clearDrawings').onclick = () => { clearAllDrawings(); };
+  document.addEventListener('keydown', e => {
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (e.key === 'Delete' && selectedDrawing && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') { e.preventDefault(); removeDrawing(selectedDrawing); }
+    if (e.key === 'Escape') { cancelDraft(); selectedDrawing = null; updateDrawingToolbar(); refreshDrawings(); }
+  });
+  const chartEl = $('#chart');
+  chartEl.addEventListener('mousedown', onChartMouseDown, true);
+  chartEl.addEventListener('mousemove', onChartMouseMove, true);
+  document.addEventListener('mouseup', onChartMouseUp);
+  chartEl.addEventListener('dblclick', onChartDblClick);
+  updateDrawingToolbar();
+  updateDrawHint();
+}
+function patternGeometry(d) {
+  const pts = drawingPoints(d);
+  const segments = [], markers = [], labels = [], arcs = [];
+  const seg = (a, b, dashed = false) => { if (a && b) segments.push({ a, b, dashed }); };
+  const P = i => pts[i];
+  const empty = () => ({ segments, arcs, markers, labels });
+  if (d.type === 'rectangle') {
+    const a = P(0), b = P(1);
+    if (!a || !b) return empty();
+    const t0 = Math.min(a.time, b.time), t1 = Math.max(a.time, b.time);
+    const p0 = Math.max(a.price, b.price), p1 = Math.min(a.price, b.price);
+    seg({ time: t0, price: p0 }, { time: t1, price: p0 });
+    seg({ time: t1, price: p0 }, { time: t1, price: p1 });
+    seg({ time: t1, price: p1 }, { time: t0, price: p1 });
+    seg({ time: t0, price: p1 }, { time: t0, price: p0 });
+    labels.push({ p: { time: (t0 + t1) / 2, price: p0 }, text: 'Rectangle' });
+  } else if (d.type === 'triangle' || d.type === 'ascTri' || d.type === 'descTri') {
+    const a = P(0), b = P(1), c = P(2);
+    if (!a || !b || !c) return empty();
+    seg(a, b); seg(b, c); seg(c, a);
+    labels.push({ p: { time: (a.time + b.time + c.time) / 3, price: (a.price + b.price + c.price) / 3 }, text: PATTERN_INFO[d.type].name });
+  } else if (d.type === 'risingWedge' || d.type === 'fallingWedge' || d.type === 'bullFlag' || d.type === 'bearFlag' || d.type === 'bullPennant' || d.type === 'bearPennant') {
+    const a = P(0), b = P(1), c = P(2), e = P(3);
+    if (!a || !b || !c || !e) return empty();
+    seg(a, b); seg(c, e); seg(a, c); seg(b, e);
+    labels.push({ p: { time: (a.time + b.time) / 2, price: Math.max(a.price, b.price) }, text: PATTERN_INFO[d.type].name });
+  } else if (d.type === 'headShoulders' || d.type === 'invHeadShoulders') {
+    const a = P(0), b = P(1), c = P(2), n = P(3);
+    if (!a || !b || !c || !n) return empty();
+    markers.push({ p: a, text: 'LS' }, { p: b, text: 'HEAD' }, { p: c, text: 'RS' });
+    const neck = n.price;
+    seg({ time: a.time, price: neck }, { time: c.time, price: neck }, true);
+    [a, b, c].forEach(p => seg({ time: p.time, price: p.price }, { time: p.time, price: neck }, true));
+    labels.push({ p: { time: a.time, price: neck }, text: 'Neckline' });
+  } else if (d.type === 'doubleTop' || d.type === 'doubleBottom') {
+    const a = P(0), b = P(1), c = P(2);
+    if (!a || !b || !c) return empty();
+    markers.push({ p: a, text: '1' }, { p: c, text: '2' });
+    seg({ time: a.time, price: b.price }, { time: c.time, price: b.price }, true);
+    seg({ time: a.time, price: a.price }, { time: a.time, price: b.price }, true);
+    seg({ time: c.time, price: c.price }, { time: c.time, price: b.price }, true);
+    labels.push({ p: { time: a.time, price: b.price }, text: 'Neckline' });
+  } else if (d.type === 'tripleTop' || d.type === 'tripleBottom') {
+    const a = P(0), b = P(1), c = P(2), n = P(3);
+    if (!a || !b || !c || !n) return empty();
+    markers.push({ p: a, text: '1' }, { p: b, text: '2' }, { p: c, text: '3' });
+    seg({ time: a.time, price: n.price }, { time: c.time, price: n.price }, true);
+    [a, b, c].forEach(p => seg({ time: p.time, price: p.price }, { time: p.time, price: n.price }, true));
+    labels.push({ p: { time: a.time, price: n.price }, text: 'Neckline' });
+  } else if (d.type === 'cupHandle') {
+    const a = P(0), b = P(1), c = P(2);
+    if (!a || !b || !c) return empty();
+    const control = { time: 2 * b.time - (a.time + c.time) / 2, price: 2 * b.price - (a.price + c.price) / 2 };
+    const handleEnd = { time: c.time + (c.time - a.time) * 0.35, price: c.price + (b.price - c.price) * 0.3 };
+    arcs.push({ a, control, b: c });
+    seg(c, handleEnd);
+    labels.push({ p: { time: b.time, price: b.price }, text: 'Cup' }, { p: handleEnd, text: 'Handle' });
+  }
+  return empty();
+}
+function renderPatternShape(d, ctx, w, h, H) {
+  const g = patternGeometry(d);
+  if (!g) return;
+  const { to, handle, label, sel } = H;
+  const solid = (a, b) => { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); };
+  const dashed = (a, b) => { ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]); };
+  g.segments.forEach(s => { const a = to(s.a), b = to(s.b); if (a && b) (s.dashed ? dashed : solid)(a, b); });
+  (g.arcs || []).forEach(ar => { const a = to(ar.a), c = to(ar.control), b = to(ar.b); if (a && c && b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(c.x, c.y, b.x, b.y); ctx.stroke(); } });
+  g.markers.forEach(m => {
+    const c = to(m.p);
+    if (!c) return;
+    ctx.beginPath(); ctx.arc(c.x, c.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = d.color; ctx.fill();
+    ctx.strokeStyle = 'rgba(12,16,20,.75)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = d.color; ctx.font = 'bold 10px "DM Mono", monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.fillText(m.text, c.x + 9, c.y - 5);
+  });
+  g.labels.forEach(l => { const c = to(l.p); if (c) label(l.text, c.x, c.y, l.align || 'left'); });
+  if (sel) drawingPoints(d).forEach(p => { if (p) handle(p); });
 }
 function render(fit = true) {
   if (!candles.length) return;
@@ -172,9 +668,34 @@ function layoutPanes() {
   for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(1);
 }
 function updateQuote() { const now = candles.at(-1), previous = candles.at(-2); if (!now || !previous) return; const pct = (now.close - previous.close) / previous.close * 100; $('#open').textContent = now.open.toFixed(2); $('#high').textContent = now.high.toFixed(2); $('#low').textContent = now.low.toFixed(2); $('#close').textContent = now.close.toFixed(2); $('#change').textContent = `${pct >= 0 ? 'UP +' : 'DOWN '}${pct.toFixed(2)}%`; $('#change').style.color = pct >= 0 ? '#5ed69d' : '#f27675'; }
-async function load() { const provider = $('#provider').value || 'DEMO', symbol = $('#symbol').value.trim() || 'NSE:RELIANCE'; $('#updated').textContent = 'Fetching candles...'; try { const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}`); if (!response.ok) throw Error(); const data = await response.json(); candles = data.candles; $('#instrument').textContent = data.symbol; $('#intervalName').textContent = ` - ${{ '1m':'1 minute','5m':'5 minutes','15m':'15 minutes','1h':'1 hour','1d':'1 day' }[interval]}`; updateQuote(); render(); renderStrategy(); $('#updated').textContent = 'Live data connected'; startLiveUpdates(); } catch { toast('Could not load market candles. Select Demo or connect a broker.'); } }
-async function refreshLiveCandle() { const provider = $('#provider').value || 'DEMO'; try { const response = await fetch(`/api/live-candle?provider=${provider}&symbol=${encodeURIComponent($('#symbol').value.trim() || 'NSE:RELIANCE')}&interval=${interval}`); if (!response.ok) { clearInterval(liveTimer); $('#updated').textContent = 'Broker stream requires connection'; return; } const latest = await response.json(); const last = candles.length - 1; candles[last] = { ...latest, time: candles[last].time }; const point = chartType === 'line' ? { time: candles[last].time / 1000, value: latest.close } : { time: candles[last].time / 1000, open: latest.open, high: latest.high, low: latest.low, close: latest.close }; mainSeries.update(point); removeIndicators(); indicatorPane = 0; active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); layoutPanes(); updateQuote(); $('#updated').textContent = `Live update ${new Date().toLocaleTimeString()}`; } catch { $('#updated').textContent = 'Live feed reconnecting...'; } }
-function startLiveUpdates() { clearInterval(liveTimer); liveTimer = setInterval(refreshLiveCandle, 2500); }
+async function load() { const provider = $('#provider').value || 'DEMO', symbol = $('#symbol').value.trim() || 'NSE:RELIANCE'; cancelDraft(); $('#updated').textContent = 'Fetching candles...'; try { const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}`); if (!response.ok) throw Error(); const data = await response.json(); candles = data.candles; $('#instrument').textContent = data.symbol; $('#intervalName').textContent = ` - ${{ '1m':'1 minute','5m':'5 minutes','15m':'15 minutes','1h':'1 hour','1d':'1 day' }[interval]}`; updateQuote(); render(); renderStrategy(); $('#updated').textContent = 'Live data connected'; startLiveUpdates(); } catch { toast('Could not load market candles. Select Demo or connect a broker.'); } }
+let liveFailures = 0;
+async function refreshLiveCandle() {
+  const provider = $('#provider').value || 'DEMO';
+  try {
+    const response = await fetch(`/api/live-candle?provider=${provider}&symbol=${encodeURIComponent($('#symbol').value.trim() || 'NSE:RELIANCE')}&interval=${interval}`);
+    if (!response.ok) {
+      liveFailures++;
+      clearInterval(liveTimer);
+      liveTimer = setInterval(refreshLiveCandle, Math.min(30000, 2500 * Math.pow(2, Math.min(liveFailures, 4))));
+      $('#updated').textContent = 'Broker stream requires connection';
+      return;
+    }
+    const latest = await response.json();
+    const last = candles.length - 1;
+    if (latest.time > candles[last].time) { candles.push({ ...latest }); }
+    else { candles[last] = { ...latest, time: candles[last].time }; }
+    if (liveFailures > 0) { liveFailures = 0; clearInterval(liveTimer); liveTimer = setInterval(refreshLiveCandle, 2500); }
+    const current = candles.at(-1);
+    const point = chartType === 'line' ? { time: current.time / 1000, value: current.close } : { time: current.time / 1000, open: current.open, high: current.high, low: current.low, close: current.close };
+    mainSeries.update(point);
+    removeIndicators(); indicatorPane = 0;
+    active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 }));
+    layoutPanes(); updateQuote();
+    $('#updated').textContent = `Live update ${new Date().toLocaleTimeString()}`;
+  } catch { $('#updated').textContent = 'Live feed reconnecting...'; }
+}
+function startLiveUpdates() { clearInterval(liveTimer); liveFailures = 0; liveTimer = setInterval(refreshLiveCandle, 2500); }
 async function loadMore() {
   if (loadingMore) return;
   loadingMore = true;
@@ -273,9 +794,32 @@ async function saveCustomStrategy() {
   if (saved) useCustomStrategy(saved[0]);
   toast('Custom strategy saved.');
 }
+function initDrawingBarToggle() {
+  const btn = $('#toggleDrawingBar');
+  const body = document.querySelector('.workspace-body');
+  if (!btn || !body) return;
+  const KEY = 'prism.drawingbar';
+  const update = () => {
+    const hidden = body.classList.contains('collapsed');
+    btn.title = hidden ? 'Show annotation toolbar' : 'Hide annotation toolbar';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-expanded', String(!hidden));
+    btn.classList.toggle('active', !hidden);
+  };
+  if (localStorage.getItem(KEY) !== '1') body.classList.add('collapsed');
+  update();
+  btn.addEventListener('click', () => {
+    body.classList.toggle('collapsed');
+    localStorage.setItem(KEY, body.classList.contains('collapsed') ? '0' : '1');
+    update();
+  });
+}
 async function setup() {
   initTheme();
   initChart();
+  setupDrawingTools();
+  initDrawingBarToggle();
+  restoreDrawings();
   chart.timeScale().subscribeVisibleTimeRangeChange(range => {
     if (!range || !candles.length || loadingMore) return;
     const buffer = intervalSeconds() * 10;
@@ -341,6 +885,18 @@ async function setup() {
     render();
   };
   $('#clearIndicators').onclick = () => { active = []; showIndicators(); render(); };
+  $('#saveIndicatorPreset').onclick = saveIndicatorPreset;
+  $('#deleteIndicatorPreset').onclick = deleteIndicatorPreset;
+  $('#savedIndicatorPresets').onchange = () => {
+    const name = $('#savedIndicatorPresets').value;
+    if (!name || !indicatorPresets[name]) return;
+    active = indicatorPresets[name].map(item => ({ name: item.name, config: { ...item.config } }));
+    showIndicators();
+    render();
+    toast('Loaded layout "' + name + '".');
+  };
+  $('#indicatorPresetName').onkeydown = e => { if (e.key === 'Enter') saveIndicatorPreset(); };
+  loadIndicatorPresets();
   $('#connect').onclick = () => toast($('#provider').value === 'DEMO' ? 'Demo feed is already connected.' : 'Add the broker API adapter and credentials on the server to enable its live stream.');
   $('#brokerDialogClose').onclick = () => { document.getElementById('brokerDialog').close(); };
   document.getElementById('brokerDialog').addEventListener('close', () => { document.getElementById('brokerDialogFields').style.display = 'none'; document.getElementById('brokerFieldsZerodha').style.display = 'none'; document.getElementById('brokerFieldsAngel').style.display = 'none'; document.getElementById('brokerFieldsUpstox').style.display = 'none'; document.getElementById('brokerFieldsFyers').style.display = 'none'; document.getElementById('brokerSavedSection').style.display = 'none'; $('#vaultSaveName').value = ''; });
@@ -400,6 +956,34 @@ function showIndicators() {
   $$('#indicatorList [data-apply-index]').forEach(button => button.onclick = () => applyConfig(Number(button.dataset.applyIndex)));
   $$('#indicatorList [data-remove-index]').forEach(button => button.onclick = () => { active.splice(Number(button.dataset.removeIndex), 1); showIndicators(); render(); });
   $('#emptyState').classList.toggle('hidden', active.length > 0);
+}
+function loadIndicatorPresets() {
+  indicatorPresets = {};
+  try { indicatorPresets = JSON.parse(localStorage.getItem('prism.indicatorPresets') || '{}'); } catch (err) { indicatorPresets = {}; }
+  const select = $('#savedIndicatorPresets');
+  if (!select) return;
+  select.innerHTML = '<option value="">Saved layouts…</option>' + Object.keys(indicatorPresets).map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  $('#deleteIndicatorPreset').disabled = !Object.keys(indicatorPresets).length;
+}
+function saveIndicatorPreset() {
+  if (!active.length) return toast('Add at least one indicator before saving a layout.');
+  const input = $('#indicatorPresetName');
+  let name = input.value.trim();
+  if (!name) { let n = 1; while (indicatorPresets['Layout ' + n]) n++; name = 'Layout ' + n; }
+  indicatorPresets[name] = active.map(item => ({ name: item.name, config: { ...item.config } }));
+  try { localStorage.setItem('prism.indicatorPresets', JSON.stringify(indicatorPresets)); } catch (err) { return toast('Could not save the layout.'); }
+  input.value = '';
+  loadIndicatorPresets();
+  $('#savedIndicatorPresets').value = name;
+  toast('Layout "' + name + '" saved.');
+}
+function deleteIndicatorPreset() {
+  const name = $('#savedIndicatorPresets').value;
+  if (!name || !indicatorPresets[name]) return;
+  delete indicatorPresets[name];
+  try { localStorage.setItem('prism.indicatorPresets', JSON.stringify(indicatorPresets)); } catch (err) { }
+  loadIndicatorPresets();
+  toast('Layout "' + name + '" deleted.');
 }
 function crossSignals(data, fast, slow) {
   const signals = [];
@@ -773,28 +1357,28 @@ async function openAngelOneDialog(prefill) {
   try {
     const status = await (await fetch('/api/auth/angel-one/status')).json();
     if (status.connected) { toast('Angel One is already connected.'); return; }
-    const needsFull = !status.hasCredentials;
+    const hasSaved = !!status.hasCredentials || !!prefill;
     const dialog = document.getElementById('brokerDialog');
     document.getElementById('brokerDialogTitle').textContent = 'Connect Angel One';
-    document.getElementById('brokerDialogText').textContent = needsFull ? 'Enter your SmartAPI key and Angel One credentials.' : 'Enter your current TOTP to reconnect.';
-    document.getElementById('brokerAngelCredentials').style.display = needsFull ? 'block' : 'none';
+    document.getElementById('brokerDialogText').textContent = hasSaved ? 'Saved SmartAPI details are pre-filled below. Use them as-is or enter new values, then add your current TOTP.' : 'Enter your SmartAPI key and Angel One credentials.';
+    document.getElementById('brokerAngelCredentials').style.display = 'block';
     document.getElementById('brokerFieldsZerodha').style.display = 'none';
     document.getElementById('brokerFieldsAngel').style.display = 'block';
     document.getElementById('brokerFieldsUpstox').style.display = 'none';
     document.getElementById('brokerFieldsFyers').style.display = 'none';
     document.getElementById('brokerDialogFields').style.display = 'block';
-    $('#brokerAngelApiKey').value = prefill?.apiKey || '';
-    $('#brokerClientCode').value = prefill?.clientCode || '';
-    $('#brokerPin').value = prefill?.pin || '';
+    $('#brokerAngelApiKey').value = prefill?.apiKey || status.apiKey || '';
+    $('#brokerClientCode').value = prefill?.clientCode || status.clientCode || '';
+    $('#brokerPin').value = prefill?.pin || status.pin || '';
     $('#brokerTotp').value = '';
-    populateBrokerSavedSelect('angel-one', needsFull);
+    populateBrokerSavedSelect('angel-one', true);
     document.getElementById('brokerDialogContinue').onclick = async () => {
       const apiKey = $('#brokerAngelApiKey').value.trim();
       const clientCode = $('#brokerClientCode').value.trim();
       const pin = $('#brokerPin').value.trim();
       const totp = $('#brokerTotp').value.trim();
       if (!/^\d{6}$/.test(totp)) { toast('TOTP must be a 6-digit code.'); return; }
-      if (needsFull && (!apiKey || !clientCode || !pin)) { toast('All fields are required.'); return; }
+      if (!hasSaved && (!clientCode || !pin)) { toast('Client ID and PIN are required.'); return; }
       dialog.close();
       document.getElementById('brokerDialogFields').style.display = 'none';
       document.getElementById('brokerFieldsAngel').style.display = 'none';
@@ -912,7 +1496,7 @@ function applyChartTheme() {
   });
 }
 function initTheme() {
-  const saved = localStorage.getItem('prism.theme') || 'dark';
+  const saved = localStorage.getItem('prism.theme') || 'light';
   document.documentElement.dataset.theme = saved === 'light' ? 'light' : 'dark';
   const toggle = $('#themeToggle');
   if (!toggle) return;

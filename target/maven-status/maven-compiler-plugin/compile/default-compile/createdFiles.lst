@@ -23,5 +23,6 @@ com\trading\chartstudio\CustomStrategyController$Strategy.class
 com\trading\chartstudio\CredentialStore.class
 com\trading\chartstudio\UserStore$ProfileData.class
 com\trading\chartstudio\BrokerCandleService.class
+com\trading\chartstudio\BrokerCandleService$LiveBar.class
 com\trading\chartstudio\UserStore$UserResult.class
 com\trading\chartstudio\CredentialStore$1.class

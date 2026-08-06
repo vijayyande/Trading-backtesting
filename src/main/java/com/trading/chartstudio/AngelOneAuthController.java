@@ -57,8 +57,11 @@ public class AngelOneAuthController {
         boolean envConfigured = !apiKey.isBlank();
         boolean sessionConfigured = session.getAttribute("angel-one.api-key") != null;
         boolean hasCredentials = store.has("angel-one", "clientCode", "pin");
-        return Map.of("connected", token != null, "configured", envConfigured || sessionConfigured || hasCredentials, "hasCredentials", hasCredentials);
+        return Map.of("connected", token != null, "configured", envConfigured || sessionConfigured || hasCredentials, "hasCredentials", hasCredentials,
+            "apiKey", safe(resolveApiKey(session)), "clientCode", safe(store.get("angel-one", "clientCode")), "pin", safe(store.get("angel-one", "pin")));
     }
+
+    private static String safe(String v) { return v == null ? "" : v; }
 
     private String resolveApiKey(HttpSession session) {
         String sessionKey = (String) session.getAttribute("angel-one.api-key");
