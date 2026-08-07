@@ -61,4 +61,10 @@ public class CredentialStore {
         }
         return true;
     }
+
+    public void remove(String broker, String key) {
+        Map<String, String> m = store.get(broker);
+        if (m == null || m.remove(key) == null) return;
+        save();
+    }
 }

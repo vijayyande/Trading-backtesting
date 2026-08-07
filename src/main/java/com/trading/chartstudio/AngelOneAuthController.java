@@ -48,17 +48,41 @@ public class AngelOneAuthController {
         JsonNode data = json.readTree(response.body()).path("data"); String token = data.path("jwtToken").asText();
         if (response.statusCode() / 100 != 2 || token.isBlank()) return ResponseEntity.status(401).body(Map.of("message", "Angel One login was rejected. Check your current TOTP and PIN."));
         session.setAttribute("angel-one.access-token", token); session.setAttribute("angel-one.feed-token", data.path("feedToken").asText());
-        store.putAll("angel-one", Map.of("clientCode", clientCode, "pin", pin));
+        session.setAttribute("angel-one.client-ip", servletRequest.getRemoteAddr());
+        store.putAll("angel-one", Map.of("clientCode", clientCode, "pin", pin, "accessToken", token,
+            "feedToken", data.path("feedToken").asText(), "clientIp", servletRequest.getRemoteAddr()));
         return ResponseEntity.ok(Map.of("connected", true));
     }
     @GetMapping("/status")
     public Map<String, Object> status(HttpSession session) {
         String token = (String) session.getAttribute("angel-one.access-token");
+        if (token == null || token.isBlank()) {
+            String stored = store.get("angel-one", "accessToken");
+            if (stored != null && !stored.isBlank()) {
+                session.setAttribute("angel-one.access-token", stored);
+                String feed = store.get("angel-one", "feedToken");
+                if (feed != null && !feed.isBlank()) session.setAttribute("angel-one.feed-token", feed);
+                String ip = store.get("angel-one", "clientIp");
+                if (ip != null && !ip.isBlank()) session.setAttribute("angel-one.client-ip", ip);
+                token = stored;
+            }
+        }
         boolean envConfigured = !apiKey.isBlank();
         boolean sessionConfigured = session.getAttribute("angel-one.api-key") != null;
         boolean hasCredentials = store.has("angel-one", "clientCode", "pin");
         return Map.of("connected", token != null, "configured", envConfigured || sessionConfigured || hasCredentials, "hasCredentials", hasCredentials,
             "apiKey", safe(resolveApiKey(session)), "clientCode", safe(store.get("angel-one", "clientCode")), "pin", safe(store.get("angel-one", "pin")));
+    }
+
+    @PostMapping("/disconnect")
+    public ResponseEntity<?> disconnect(HttpSession session) {
+        session.removeAttribute("angel-one.access-token");
+        session.removeAttribute("angel-one.feed-token");
+        session.removeAttribute("angel-one.client-ip");
+        store.remove("angel-one", "accessToken");
+        store.remove("angel-one", "feedToken");
+        store.remove("angel-one", "clientIp");
+        return ResponseEntity.ok(Map.of("connected", false));
     }
 
     private static String safe(String v) { return v == null ? "" : v; }

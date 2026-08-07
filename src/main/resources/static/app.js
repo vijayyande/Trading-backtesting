@@ -2,13 +2,15 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 const COLORS = ['#47d7d1', '#f1bd56', '#b88cff', '#f27675', '#75b9ff', '#9bdc71'];
-let chart, mainSeries, candles = [], interval = '1d', chartType = 'candlestick', active = [], liveTimer, loadingMore = false, backtestRuns = [], customStrategies = new Map(), customDraft = { entryConditions: [], exitConditions: [], stopLoss: 0 };
+let chart, mainSeries, candles = [], interval = '5m', chartType = 'candlestick', active = [], liveTimer, loadingMore = false, noMoreHistory = false, backtestRuns = [], customStrategies = new Map(), customDraft = { entryConditions: [], exitConditions: [], stopLoss: 0 };
 let account = { loggedIn: false, username: '', profiles: [] }, accountMode = 'login';
 let indicatorPane = 0;
 let indicatorPresets = {};
 let mainMarkers = null;
 let drawings = [], drawMode = 'select', drawColor = '#47d7d1', selectedDrawing = null, drawingDraft = null, dragState = null, drawingSeq = 0;
 const intervalSeconds = () => ({ '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 }[interval] || 86400);
+const defaultLimit = () => ({ '1m': 9000, '5m': 2000, '15m': 700, '1h': 200, '1d': 30 }[interval] || 30);
+const ONE_MONTH_MS = 30 * 24 * 3600 * 1000;
 const INDICATOR_PARAMS = {
   BB: [['period', 'Period', 20], ['std', 'Std dev', 2]], KC: [['period', 'EMA', 20], ['mult', 'ATR mult', 2]], DC: [['period', 'Period', 20]], ENVELOPE: [['period', 'Period', 20], ['percent', 'Width %', 2.5]],
   SAR: [['accel', 'Acceleration', .02], ['maxAccel', 'Maximum', .2]], SUPERTREND: [['atrPeriod', 'ATR period', 10], ['mult', 'Multiplier', 3]], ICHIMOKU: [['conversion', 'Conversion', 9], ['base', 'Base', 26], ['spanB', 'Span B', 52]],
@@ -668,20 +670,78 @@ function layoutPanes() {
   for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(1);
 }
 function updateQuote() { const now = candles.at(-1), previous = candles.at(-2); if (!now || !previous) return; const pct = (now.close - previous.close) / previous.close * 100; $('#open').textContent = now.open.toFixed(2); $('#high').textContent = now.high.toFixed(2); $('#low').textContent = now.low.toFixed(2); $('#close').textContent = now.close.toFixed(2); $('#change').textContent = `${pct >= 0 ? 'UP +' : 'DOWN '}${pct.toFixed(2)}%`; $('#change').style.color = pct >= 0 ? '#5ed69d' : '#f27675'; }
-async function load() { const provider = $('#provider').value || 'DEMO', symbol = $('#symbol').value.trim() || 'NSE:RELIANCE'; cancelDraft(); $('#updated').textContent = 'Fetching candles...'; try { const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}`); if (!response.ok) throw Error(); const data = await response.json(); candles = data.candles; $('#instrument').textContent = data.symbol; $('#intervalName').textContent = ` - ${{ '1m':'1 minute','5m':'5 minutes','15m':'15 minutes','1h':'1 hour','1d':'1 day' }[interval]}`; updateQuote(); render(); renderStrategy(); $('#updated').textContent = 'Live data connected'; startLiveUpdates(); } catch { toast('Could not load market candles. Select Demo or connect a broker.'); } }
+let loadRetryTimer = null, loadRetries = 0;
+async function load() {
+  const provider = $('#provider').value || 'DEMO', symbol = $('#symbol').value.trim() || 'NSE:RELIANCE';
+  cancelDraft();
+  clearInterval(liveTimer);
+  if (loadRetryTimer) { clearTimeout(loadRetryTimer); loadRetryTimer = null; }
+  $('#updated').textContent = 'Fetching candles...';
+  try {
+    const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${defaultLimit()}`);
+    if (!response.ok) {
+      let msg = provider === 'DEMO' ? 'Could not load market candles.' : `Could not load ${provider} candles.`;
+      try { const body = await response.text(); if (body && body.trim()) msg = body; } catch {}
+      throw Error(msg);
+    }
+    const data = await response.json();
+    candles = data.candles;
+    noMoreHistory = false;
+    const reqInterval = interval;
+    const targetOldest = Date.now() - ONE_MONTH_MS;
+    let backfillPages = 0;
+    while (candles.length && candles[0].time > targetOldest && !noMoreHistory && backfillPages < 14) {
+      const to = Math.floor(candles[0].time / 1000) - 1;
+      const backfillLimit = Math.max(defaultLimit(), 30000);
+      const backfillResponse = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${backfillLimit}&to=${to}`);
+      if (!backfillResponse.ok) break;
+      const older = await backfillResponse.json();
+      if (provider !== $('#provider').value || symbol !== ($('#symbol').value.trim() || 'NSE:RELIANCE') || reqInterval !== interval) return;
+      if (!older.candles || !older.candles.length) { noMoreHistory = true; break; }
+      if (older.candles[0].time >= candles[0].time) break;
+      candles = [...older.candles, ...candles];
+      backfillPages++;
+    }
+    $('#instrument').textContent = data.symbol;
+    $('#intervalName').textContent = ` - ${{ '1m':'1 minute','5m':'5 minutes','15m':'15 minutes','1h':'1 hour','1d':'1 day' }[interval]}`;
+    updateQuote(); render(); renderStrategy();
+    $('#feedLabel').textContent = provider === 'DEMO' ? 'DEMO MARKET FEED' : 'LIVE ' + provider + ' FEED';
+    $('#updated').textContent = provider === 'DEMO' ? 'Demo feed (simulated data)' : 'Live data connected';
+    loadRetries = 0;
+    startLiveUpdates();
+  } catch (error) {
+    clearInterval(liveTimer);
+    $('#updated').textContent = provider === 'DEMO' ? 'Candles unavailable' : 'Live feed unavailable — showing historical data';
+    toast(error && error.message ? error.message : (provider === 'DEMO' ? 'Could not load market candles.' : `Could not load ${provider} candles.`));
+    if (provider !== 'DEMO' && loadRetries < 5) {
+      loadRetries++;
+      loadRetryTimer = setTimeout(load, 2000 * loadRetries);
+    }
+  }
+}
 let liveFailures = 0;
 async function refreshLiveCandle() {
   const provider = $('#provider').value || 'DEMO';
+  const reqInterval = interval;
+  const reqSymbol = $('#symbol').value.trim() || 'NSE:RELIANCE';
   try {
-    const response = await fetch(`/api/live-candle?provider=${provider}&symbol=${encodeURIComponent($('#symbol').value.trim() || 'NSE:RELIANCE')}&interval=${interval}`);
+    const response = await fetch(`/api/live-candle?provider=${provider}&symbol=${encodeURIComponent(reqSymbol)}&interval=${reqInterval}`);
+    if (provider !== $('#provider').value || reqInterval !== interval || reqSymbol !== ($('#symbol').value.trim() || 'NSE:RELIANCE')) return;
     if (!response.ok) {
       liveFailures++;
       clearInterval(liveTimer);
       liveTimer = setInterval(refreshLiveCandle, Math.min(30000, 2500 * Math.pow(2, Math.min(liveFailures, 4))));
-      $('#updated').textContent = 'Broker stream requires connection';
+      if (provider !== 'DEMO' && candles.length) {
+        $('#updated').textContent = 'Live feed unavailable — showing historical data';
+        return;
+      }
+      let msg = 'Broker stream requires connection';
+      try { const body = await response.text(); if (body && body.trim()) msg = body; } catch {}
+      $('#updated').textContent = msg;
       return;
     }
     const latest = await response.json();
+    if (!candles.length) return;
     const last = candles.length - 1;
     if (latest.time > candles[last].time) { candles.push({ ...latest }); }
     else { candles[last] = { ...latest, time: candles[last].time }; }
@@ -692,23 +752,28 @@ async function refreshLiveCandle() {
     removeIndicators(); indicatorPane = 0;
     active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 }));
     layoutPanes(); updateQuote();
-    $('#updated').textContent = `Live update ${new Date().toLocaleTimeString()}`;
+    $('#updated').textContent = provider === 'DEMO' ? `Demo tick ${new Date().toLocaleTimeString()}` : `Live update ${new Date().toLocaleTimeString()}`;
   } catch { $('#updated').textContent = 'Live feed reconnecting...'; }
 }
 function startLiveUpdates() { clearInterval(liveTimer); liveFailures = 0; liveTimer = setInterval(refreshLiveCandle, 2500); }
 async function loadMore() {
-  if (loadingMore) return;
+  if (loadingMore || noMoreHistory || !candles.length) return;
   loadingMore = true;
   try {
     const provider = $('#provider').value || 'DEMO';
     const symbol = $('#symbol').value.trim() || 'NSE:RELIANCE';
+    const reqInterval = interval;
     const to = Math.floor(candles[0].time / 1000) - 1;
-    const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=180&to=${to}`);
+    const logical = chart.timeScale().getVisibleLogicalRange();
+    const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${defaultLimit()}&to=${to}`);
     if (!response.ok) return;
     const data = await response.json();
-    if (!data.candles || !data.candles.length) return;
+    if (provider !== $('#provider').value || symbol !== ($('#symbol').value.trim() || 'NSE:RELIANCE') || reqInterval !== interval) return;
+    if (!data.candles || !data.candles.length) { noMoreHistory = true; return; }
+    const added = data.candles.length;
     candles = [...data.candles, ...candles];
     render(false); renderStrategy();
+    if (logical) chart.timeScale().setVisibleLogicalRange({ from: logical.from + added, to: logical.to + added });
   } finally { loadingMore = false; }
 }
 function conditionRow(kind, condition, index) {
@@ -820,10 +885,10 @@ async function setup() {
   setupDrawingTools();
   initDrawingBarToggle();
   restoreDrawings();
-  chart.timeScale().subscribeVisibleTimeRangeChange(range => {
-    if (!range || !candles.length || loadingMore) return;
-    const buffer = intervalSeconds() * 10;
-    if (candles[0].time / 1000 - range.from < buffer) loadMore();
+  chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+    if (!range || range.from == null || !candles.length || loadingMore || noMoreHistory) return;
+    const bufferBars = 30;
+    if (range.from < bufferBars && range.to < candles.length - 1) loadMore();
   });
   const providers = await (await fetch('/api/providers')).json();
   $('#provider').innerHTML = providers.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
@@ -860,6 +925,16 @@ async function setup() {
     } catch { $('#connect').textContent = 'Connect ' + p.name; }
     load();
   };
+  try { await refreshAccount(); } catch { }
+  if ($('#provider').value === 'DEMO') {
+    for (const b of providers.filter(p => p.id !== 'DEMO')) {
+      const slug = b.id === 'ZERODHA' ? 'zerodha' : b.id.toLowerCase().replace('angel_one', 'angel-one');
+      try {
+        const status = await (await fetch('/api/auth/' + slug + '/status')).json();
+        if (status.connected) { $('#provider').value = b.id; toast('Switched to ' + b.name + ' — live data active.'); break; }
+      } catch {}
+    }
+  }
   $('#provider').dispatchEvent(new Event('change'));
   $('#symbol').addEventListener('change', load);
   $('#refreshSymbols').onclick = async () => { const groups = await (await fetch('/api/symbols')).json(); const val = $('#symbol').value, selected = [...$('#backtestSymbols').selectedOptions].map(o => o.value); const options = groups.map(g => `<optgroup label="${g.category}">${g.symbols.map(s => `<option value="${s.value}">${s.label}</option>`).join('')}</optgroup>`).join(''); $('#symbol').innerHTML = options; $('#backtestSymbols').innerHTML = options; $('#symbol').value = val; [...$('#backtestSymbols').options].forEach(o => o.selected = selected.includes(o.value)); };
@@ -929,7 +1004,6 @@ async function setup() {
   $('#vaultDialogClose').onclick = () => { document.getElementById('vaultDialog').close(); };
   $('#vaultDialogDone').onclick = () => { document.getElementById('vaultDialog').close(); };
   $('#vaultLogout').onclick = logout;
-  try { await refreshAccount(); } catch { }
 }
 function showIndicators() {
   $('#indicatorList').innerHTML = active.map((item, i) => {
@@ -1353,10 +1427,31 @@ function applySavedProfile(brokerSlug, data) {
     $('#brokerFyersAppSecret').value = data.appSecret || '';
   }
 }
+async function confirmDisconnect(provider, name) {
+  const url = provider === 'ANGEL_ONE' ? '/api/auth/angel-one/disconnect' : provider === 'ZERODHA' ? '/api/auth/zerodha/disconnect' : null;
+  if (!url) { toast(name + ' is already connected.'); return; }
+  const dialog = document.getElementById('brokerDialog');
+  document.getElementById('brokerDialogTitle').textContent = 'Disconnect from ' + name + '?';
+  document.getElementById('brokerDialogText').textContent = 'The saved connection will be revoked. Reconnecting requires a fresh ' + name + ' login (TOTP for Angel One).';
+  document.getElementById('brokerDialogFields').style.display = 'none';
+  const btn = document.getElementById('brokerDialogContinue');
+  btn.textContent = 'Disconnect';
+  btn.onclick = async () => {
+    dialog.close();
+    try {
+      const res = await fetch(url, { method: 'POST' });
+      if (!res.ok) throw Error('Disconnect failed.');
+      toast('Disconnected from ' + name + '.');
+      if ($('#provider').value === provider) $('#provider').dispatchEvent(new Event('change'));
+    } catch (e) { toast(e.message || 'Disconnect failed.'); }
+  };
+  dialog.addEventListener('close', () => { btn.textContent = 'Continue to broker login'; }, { once: true });
+  dialog.showModal();
+}
 async function openAngelOneDialog(prefill) {
   try {
     const status = await (await fetch('/api/auth/angel-one/status')).json();
-    if (status.connected) { toast('Angel One is already connected.'); return; }
+    if (status.connected) { confirmDisconnect('ANGEL_ONE', 'Angel One'); return; }
     const hasSaved = !!status.hasCredentials || !!prefill;
     const dialog = document.getElementById('brokerDialog');
     document.getElementById('brokerDialogTitle').textContent = 'Connect Angel One';
@@ -1387,6 +1482,8 @@ async function openAngelOneDialog(prefill) {
         if (!res.ok) throw Error((await res.json()).message);
         await saveProfileToVault('angel-one', { apiKey, clientCode, pin });
         toast('Angel One connected.');
+        if ($('#provider').value !== 'ANGEL_ONE') $('#provider').value = 'ANGEL_ONE';
+        $('#provider').dispatchEvent(new Event('change'));
       } catch (e) { toast(e.message || 'Angel One connection failed.'); }
     };
     dialog.showModal();
@@ -1395,7 +1492,7 @@ async function openAngelOneDialog(prefill) {
 async function openZerodhaDialog() {
   try {
     const status = await (await fetch('/api/auth/zerodha/status')).json();
-    if (status.connected) { toast('Zerodha Kite Connect is already connected.'); return; }
+    if (status.connected) { confirmDisconnect('ZERODHA', 'Zerodha'); return; }
     if (!status.configured) {
       const dialog = document.getElementById('brokerDialog');
       document.getElementById('brokerDialogTitle').textContent = 'Connect Zerodha';
@@ -1431,7 +1528,7 @@ async function openOAuthDialog(provider) {
   const slug = provider === 'UPSTOX' ? 'upstox' : 'fyers';
   try {
     const status = await (await fetch('/api/auth/' + slug + '/status')).json();
-    if (status.connected) { toast(provider + ' is already connected.'); return; }
+    if (status.connected) { confirmDisconnect(provider, provider === 'UPSTOX' ? 'Upstox' : 'Fyers'); return; }
     if (status.configured) { window.location.assign('/api/auth/' + slug + '/start'); return; }
     const isUpstox = provider === 'UPSTOX';
     const dialog = document.getElementById('brokerDialog');
@@ -1473,7 +1570,7 @@ document.addEventListener('click', async event => {
   const broker = provider.toLowerCase();
   try {
     const status = await (await fetch('/api/auth/' + broker + '/status')).json();
-    if (status.connected) { toast($('#provider option:checked').textContent + ' is already connected.'); return; }
+    if (status.connected) { confirmDisconnect(provider, $('#provider option:checked').textContent || provider); return; }
     if (status.configured) { window.location.assign('/api/auth/' + broker + '/start'); return; }
     toast($('#provider option:checked').textContent + ' is not configured on this server.');
   } catch { toast('Could not start the ' + $('#provider option:checked').textContent + ' connection.'); }

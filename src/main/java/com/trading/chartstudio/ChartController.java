@@ -479,10 +479,24 @@ public class ChartController {
         String safeProvider = provider.toUpperCase(Locale.ROOT);
         if (!PROVIDERS.contains(safeProvider)) return ResponseEntity.badRequest().body("Unknown provider");
         if (!INTERVALS.contains(interval)) return ResponseEntity.badRequest().body("Unsupported interval");
-        int count = Math.clamp(limit, 20, 5000);
+        int count = Math.clamp(limit, 20, 30000);
         List<Candle> candles = null;
         if (!"DEMO".equals(safeProvider)) {
             candles = brokerCandleService.fetchCandles(safeProvider, symbol, interval, count, to, session);
+        }
+        if (candles == null && !"DEMO".equals(safeProvider)) {
+            if (!brokerCandleService.isConnected(safeProvider, session)) {
+                return ResponseEntity.status(401).body("Not connected to " + safeProvider
+                    + ". Click Connect and complete the broker login, or switch to Demo.");
+            }
+            List<Candle> lastKnown = brokerCandleService.lastKnownCandles(safeProvider, symbol, interval);
+            if (lastKnown != null && !lastKnown.isEmpty()) {
+                return ResponseEntity.ok(new CandleResponse(safeProvider, symbol.toUpperCase(Locale.ROOT), interval, lastKnown));
+            }
+            String detail = "ANGEL_ONE".equals(safeProvider) && brokerCandleService.lastAngelError() != null
+                ? brokerCandleService.lastAngelError() : "no data available";
+            return ResponseEntity.status(502).body("Live candles unavailable for " + safeProvider
+                + " (" + detail + "). Reconnect the broker or switch to Demo.");
         }
         if (candles == null) {
             if (from != null && to != null) {
@@ -512,15 +526,16 @@ public class ChartController {
             Candle live = brokerCandleService.fetchLiveQuote(safeProvider, symbol, interval, 2, session);
             if (live != null) return ResponseEntity.ok(live);
             List<Candle> history = brokerCandleService.fetchCandles(safeProvider, symbol, interval, 2, session);
-            if (history != null && !history.isEmpty()) {
-                Candle last = history.getLast();
-                double delta = (new Random(System.nanoTime()).nextDouble() - .5) * Math.max(last.close() * .0015, .05);
-                double close = round(Math.max(.01, last.close() + delta));
-                Candle updated = new Candle(last.time(), last.open(), round(Math.max(last.high(), close)),
-                    round(Math.min(last.low(), close)), close, last.volume() + 100 + new Random().nextInt(4000));
-                return ResponseEntity.ok(updated);
+            if (history != null && !history.isEmpty()) return ResponseEntity.ok(history.getLast());
+            if (!brokerCandleService.isConnected(safeProvider, session)) {
+                return ResponseEntity.status(401).body("Not connected to " + safeProvider + ". Click Connect to log in.");
             }
-            return ResponseEntity.status(503).body("Broker data unavailable. Check connection.");
+            List<Candle> lastKnown = brokerCandleService.lastKnownCandles(safeProvider, symbol, interval);
+            if (lastKnown != null && !lastKnown.isEmpty()) return ResponseEntity.ok(lastKnown.getLast());
+            String detail = "ANGEL_ONE".equals(safeProvider) && brokerCandleService.lastAngelError() != null
+                ? brokerCandleService.lastAngelError() : "no data available";
+            return ResponseEntity.status(503).body("Broker data unavailable for " + safeProvider
+                + " (" + detail + "). Reconnect the broker or switch to Demo.");
         }
         String key = symbol.toUpperCase(Locale.ROOT) + ":" + interval;
         Candle previous = liveCandles.computeIfAbsent(key, ignored -> {

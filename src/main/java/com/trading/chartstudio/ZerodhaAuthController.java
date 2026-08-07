@@ -98,18 +98,38 @@ public class ZerodhaAuthController {
         }
         session.setAttribute("zerodha.access-token", accessToken);
         session.setAttribute("zerodha.user-id", data.path("user_id").asText());
+        store.putAll("zerodha", Map.of("accessToken", accessToken, "userId", data.path("user_id").asText()));
         return ResponseEntity.status(302).location(URI.create(appUrl + "/?broker=zerodha&connected=true")).build();
     }
 
     @GetMapping("/status")
     public Map<String, Object> status(HttpSession session) {
         String userId = (String) session.getAttribute("zerodha.user-id");
+        if (userId == null || userId.isBlank()) {
+            String stored = store.get("zerodha", "accessToken");
+            if (stored != null && !stored.isBlank()) {
+                session.setAttribute("zerodha.access-token", stored);
+                String storedUserId = store.get("zerodha", "userId");
+                session.setAttribute("zerodha.user-id", storedUserId != null ? storedUserId : "");
+                userId = storedUserId;
+            }
+        }
         boolean envConfigured = !apiKey.isBlank() && !apiSecret.isBlank();
         boolean sessionConfigured = session.getAttribute("zerodha.api-key") != null;
         boolean hasCredentials = store.has("zerodha", "apiKey", "apiSecret");
-        return Map.of("connected", userId != null, "userId", userId == null ? "" : userId,
+        return Map.of("connected", userId != null && !userId.isBlank(), "userId", userId == null ? "" : userId,
             "configured", envConfigured || sessionConfigured || hasCredentials,
             "hasCredentials", hasCredentials);
+    }
+
+    @PostMapping("/disconnect")
+    public ResponseEntity<?> disconnect(HttpSession session) {
+        session.removeAttribute("zerodha.access-token");
+        session.removeAttribute("zerodha.user-id");
+        session.removeAttribute("zerodha.oauth-state");
+        store.remove("zerodha", "accessToken");
+        store.remove("zerodha", "userId");
+        return ResponseEntity.ok(Map.of("connected", false));
     }
 
     private void requireConfiguration(HttpSession session) {
