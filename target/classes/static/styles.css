@@ -153,7 +153,7 @@ hr{border:0;border-top:1px solid var(--line);margin:23px 0}
 
 /* Custom strategy */
 .custom-rule-heading{display:flex;justify-content:space-between;align-items:center;margin-top:11px;color:var(--muted);font:9px 'DM Mono';letter-spacing:.4px}.custom-rule-heading span{display:flex;align-items:center;gap:5px}.custom-rule-heading select{width:auto;padding:2px 4px;font:9px 'DM Mono'}.custom-rule-heading button,#newCustomStrategy{border:0;background:none;color:var(--cyan);font:10px 'DM Mono';cursor:pointer}
-.custom-condition{display:grid;grid-template-columns:1fr .38fr .36fr .68fr .65fr .34fr .55fr .55fr .18fr;gap:4px;margin-top:5px}.custom-condition select,.custom-condition input{min-width:0;padding:6px 4px;font:9px 'DM Mono'}.custom-condition button{border:0;background:none;color:var(--muted);cursor:pointer}
+.custom-condition{display:grid;grid-template-columns:1fr auto auto auto 1fr auto auto auto .18fr;gap:4px;margin-top:5px;align-items:center}.custom-condition select,.custom-condition input{min-width:0;padding:6px 4px;font:9px 'DM Mono'}.custom-condition button{border:0;background:none;color:var(--muted);cursor:pointer}.cc-signal{width:78px}.cc-operator{width:96px}.cc-connector{width:52px}.cc-number{width:70px}.cc-params{display:flex;gap:4px;flex-wrap:wrap}.cc-params input{width:44px}
 .target-settings{display:flex;gap:7px;margin-top:10px}.target-settings label{flex:1;color:var(--muted);font:9px 'DM Mono'}.target-settings select,.target-settings input{margin-top:4px;padding:6px 5px;font:10px 'DM Mono'}
 
 /* Dialog + toast */

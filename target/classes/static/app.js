@@ -20,6 +20,77 @@ const INDICATOR_PARAMS = {
 const indicatorParams = name => INDICATOR_PARAMS[name] || [['period', 'Period', 14]];
 const defaultIndicatorConfig = name => Object.fromEntries(indicatorParams(name).map(([key, , value]) => [key, value]));
 
+const CONDITION_PARAMS = {
+  CLOSE: [], OPEN: [], HIGH: [], LOW: [], VOLUME: [], TYPICAL: [],
+  SMA: [['period', 'Period', 14]], EMA: [['period', 'Period', 14]], WMA: [['period', 'Period', 14]],
+  DEMA: [['period', 'Period', 14]], TEMA: [['period', 'Period', 14]], HMA: [['period', 'Period', 14]], KAMA: [['period', 'Period', 14]],
+  SAR: [['accel', 'Acceleration', .02], ['maxAccel', 'Max accel', .2]],
+  SUPERTREND: [['atrPeriod', 'ATR period', 10], ['mult', 'Multiplier', 3]],
+  RSI: [['period', 'Period', 14]],
+  MACD: [['fast', 'Fast', 12], ['slow', 'Slow', 26], ['signal', 'Signal', 9]],
+  STOCH: [['k', '%K', 14], ['d', '%D', 3]],
+  MFI: [['period', 'Period', 14]], CCI: [['period', 'Period', 20]], WILLIAMS_R: [['period', 'Period', 14]],
+  ROC: [['period', 'Period', 12]], MOM: [['period', 'Period', 12]],
+  ATR: [['period', 'Period', 14]], ADX: [['period', 'Period', 14]], AROON: [['period', 'Period', 14]],
+  VWAP: [['period', 'Period', 20]],
+  OBV: [], ADL: [],
+  CMF: [['period', 'Period', 20]], FI: [['period', 'Period', 13]],
+  BB: [['period', 'Period', 20], ['std', 'Std dev', 2]],
+  DC: [['period', 'Period', 20]],
+  KC: [['period', 'Period', 20], ['mult', 'Multiplier', 2]],
+};
+const CONDITION_SIGNALS = {
+  MACD: [['histogram', 'Histogram'], ['macd', 'MACD line'], ['signal', 'Signal']],
+  STOCH: [['k', '%K'], ['d', '%D']],
+  ADX: [['adx', 'ADX'], ['dip', '+DI'], ['din', '-DI']],
+  AROON: [['osc', 'Oscillator'], ['up', 'Up'], ['down', 'Down']],
+  BB: [['mid', 'Middle'], ['upper', 'Upper'], ['lower', 'Lower']],
+  DC: [['high', 'High'], ['low', 'Low']],
+  KC: [['mid', 'Middle'], ['upper', 'Upper'], ['lower', 'Lower']],
+};
+const CONDITION_INDICATORS = [['CLOSE', 'Close'], ['OPEN', 'Open'], ['HIGH', 'High'], ['LOW', 'Low'], ['VOLUME', 'Volume'], ['TYPICAL', 'Typical price'], ['SMA', 'SMA'], ['EMA', 'EMA'], ['WMA', 'WMA'], ['DEMA', 'Double EMA'], ['TEMA', 'Triple EMA'], ['HMA', 'Hull MA'], ['KAMA', 'Kaufman MA'], ['SAR', 'Parabolic SAR'], ['SUPERTREND', 'Supertrend'], ['RSI', 'RSI'], ['MACD', 'MACD'], ['STOCH', 'Stochastic'], ['MFI', 'MFI'], ['CCI', 'CCI'], ['WILLIAMS_R', 'Williams %R'], ['ROC', 'Rate of Change'], ['MOM', 'Momentum'], ['ATR', 'Average True Range'], ['ADX', 'ADX'], ['AROON', 'Aroon'], ['VWAP', 'VWAP'], ['OBV', 'On-Balance Volume'], ['ADL', 'Accumulation/Distribution'], ['CMF', 'Chaikin Money Flow'], ['FI', 'Force Index'], ['BB', 'Bollinger Bands'], ['DC', 'Donchian Channel'], ['KC', 'Keltner Channel']];
+const conditionParams = name => CONDITION_PARAMS[name] || [['period', 'Period', 14]];
+const conditionParamsObj = name => Object.fromEntries(conditionParams(name).map(([key, , value]) => [key, value]));
+const isDecimalParam = key => ['accel', 'maxAccel', 'std', 'mult'].includes(key);
+const conditionSignals = name => CONDITION_SIGNALS[name] || null;
+const defaultSignal = name => CONDITION_SIGNALS[name]?.[0][0] || null;
+const LEGACY_INDICATOR_MAP = {
+  BB_UPPER: ['BB', 'upper'], BB_MID: ['BB', 'mid'], BB_LOWER: ['BB', 'lower'],
+  DC_HIGH: ['DC', 'high'], DC_LOW: ['DC', 'low'],
+  KC_UPPER: ['KC', 'upper'], KC_LOWER: ['KC', 'lower'],
+};
+function normalizeSide(side) {
+  side.params ||= {};
+  for (const [key, , def] of conditionParams(side.indicator)) {
+    if (side.params[key] == null) side.params[key] = side[key] != null ? Number(side[key]) : def;
+  }
+  const signals = conditionSignals(side.indicator);
+  if (signals && !signals.some(([key]) => key === side.signal)) side.signal = defaultSignal(side.indicator);
+  side.offset ??= 0;
+}
+function normalizeCondition(condition) {
+  if (!condition.left) {
+    const mapped = LEGACY_INDICATOR_MAP[condition.indicator];
+    const params = { ...(condition.params || {}) };
+    if (params.period == null && condition.period != null) params.period = Number(condition.period);
+    const left = { indicator: mapped ? mapped[0] : condition.indicator, params, signal: mapped ? mapped[1] : condition.signal, offset: Math.min(0, Number(condition.candleOffset) || 0) };
+    const right = condition.targetMode === 'CLOSE' ? { indicator: 'CLOSE', params: {}, signal: null, offset: Math.min(0, Number(condition.targetOffset) || 0) } : { indicator: 'NUMBER', params: {}, signal: null, offset: 0, number: condition.value ?? 0, number2: condition.value2 };
+    delete condition.indicator; delete condition.params; delete condition.signal; delete condition.candleOffset; delete condition.targetMode; delete condition.targetOffset; delete condition.value; delete condition.value2;
+    Object.assign(condition, { left, operator: condition.operator || 'above', right });
+  }
+  normalizeSide(condition.left);
+  if (condition.right && condition.right.indicator !== 'NUMBER') normalizeSide(condition.right);
+}
+function finalizeLogic(group, legacy) {
+  group.forEach((c, i, arr) => { if (c.connector == null) c.connector = i < arr.length - 1 ? (legacy || 'AND') : 'AND'; });
+}
+function setPath(object, path, value) {
+  const keys = path.split('.');
+  let cursor = object;
+  for (let i = 0; i < keys.length - 1; i++) cursor = cursor[keys[i]];
+  cursor[keys.at(-1)] = keys.at(-1) === 'number' || keys.at(-1) === 'number2' ? Number(value) : value;
+}
+
 const STRATEGIES = {
   SMA_CROSS: { name: 'SMA Crossover', params: [{ k: 'fast', label: 'Fast', def: 9 }, { k: 'slow', label: 'Slow', def: 21 }],
     compute: (c, p) => { const f = sma(c.map(x => x.close), p.fast), s = sma(c.map(x => x.close), p.slow); return crossSignals(c, f, s); } },
@@ -830,11 +901,24 @@ async function loadMore() {
     if (logical) chart.timeScale().setVisibleLogicalRange({ from: logical.from + added, to: logical.to + added });
   } finally { loadingMore = false; }
 }
+function sideControls(side, dataField, operator) {
+  const options = CONDITION_INDICATORS.map(([value, label]) => `<option value="${value}" ${side.indicator === value ? 'selected' : ''}>${label}</option>`).join('');
+  const indicator = `<select class="${dataField === 'left' ? 'cc-left' : 'cc-right'}" data-field="${dataField}.indicator">${dataField === 'right' ? `<option value="NUMBER" ${side.indicator === 'NUMBER' ? 'selected' : ''}>Number…</option>` : ''}${options}</select>`;
+  if (side.indicator === 'NUMBER') {
+    const range = operator === 'between' || operator === 'outside';
+    return indicator + `<input data-field="${dataField}.number" type="number" step="any" class="cc-number" value="${side.number ?? ''}" placeholder="Value" title="Numeric target value">${range ? `<input data-field="${dataField}.number2" type="number" step="any" class="cc-number" value="${side.number2 ?? ''}" placeholder="Upper" title="Upper bound">` : ''}`;
+  }
+  const signals = conditionSignals(side.indicator);
+  const signal = signals ? `<select class="cc-signal" data-field="${dataField}.signal" title="Signal to compare">${signals.map(([key, label]) => `<option value="${key}" ${(side.signal || defaultSignal(side.indicator)) === key ? 'selected' : ''}>${label}</option>`).join('')}</select>` : '';
+  const params = conditionParams(side.indicator).map(([key, label, def]) => {
+    const value = side.params && side.params[key] != null ? side.params[key] : def;
+    return `<input data-side="${dataField}" data-param="${key}" type="number" step="${isDecimalParam(key) ? 'any' : '1'}" value="${value}" title="${label}" placeholder="${label}">`;
+  }).join('');
+  return indicator + signal + `<span class="cc-params">${params}</span>`;
+}
 function conditionRow(kind, condition, index) {
-  const options = [['CLOSE', 'Close'], ['OPEN', 'Open'], ['HIGH', 'High'], ['LOW', 'Low'], ['VOLUME', 'Volume'], ['TYPICAL', 'Typical price'], ['SMA', 'SMA'], ['EMA', 'EMA'], ['WMA', 'WMA'], ['DEMA', 'Double EMA'], ['TEMA', 'Triple EMA'], ['HMA', 'Hull MA'], ['KAMA', 'Kaufman MA'], ['SAR', 'Parabolic SAR'], ['SUPERTREND', 'Supertrend'], ['RSI', 'RSI'], ['MACD', 'MACD'], ['STOCH', 'Stochastic %K'], ['MFI', 'MFI'], ['CCI', 'CCI'], ['WILLIAMS_R', 'Williams %R'], ['ROC', 'Rate of Change'], ['MOM', 'Momentum'], ['ATR', 'Average True Range'], ['ADX', 'ADX'], ['AROON', 'Aroon oscillator'], ['VWAP', 'VWAP'], ['OBV', 'On-Balance Volume'], ['ADL', 'Accumulation/Distribution'], ['CMF', 'Chaikin Money Flow'], ['FI', 'Force Index'], ['BB_UPPER', 'Bollinger Upper'], ['BB_MID', 'Bollinger Middle'], ['BB_LOWER', 'Bollinger Lower'], ['DC_HIGH', 'Donchian High'], ['DC_LOW', 'Donchian Low'], ['KC_UPPER', 'Keltner Upper'], ['KC_LOWER', 'Keltner Lower']].map(([value, label]) => `<option value="${value}" ${condition.indicator === value ? 'selected' : ''}>${label}</option>`).join('');
   const operators = [['above', 'above'], ['aboveEqual', 'above or equal'], ['below', 'below'], ['belowEqual', 'below or equal'], ['crossesAbove', 'crosses above'], ['crossesBelow', 'crosses below'], ['between', 'between'], ['outside', 'outside range']].map(([value, label]) => `<option value="${value}" ${condition.operator === value ? 'selected' : ''}>${label}</option>`).join('');
-  const targets = [['NUMBER', 'Number'], ['CLOSE', 'Candle close']].map(([value, label]) => `<option value="${value}" ${(condition.targetMode || 'NUMBER') === value ? 'selected' : ''}>${label}</option>`).join('');
-  return `<div class="custom-condition" data-kind="${kind}" data-index="${index}"><select data-field="indicator">${options}</select><input data-field="period" type="number" min="2" max="200" value="${condition.period || 14}" title="Indicator period"><input data-field="candleOffset" type="number" max="0" step="1" value="${Math.min(0, Number(condition.candleOffset) || 0)}" title="Indicator candle offset"><select data-field="operator">${operators}</select><select data-field="targetMode" title="Compare against"><option value="NUMBER">Number</option><option value="CLOSE">Candle close</option></select><input data-field="targetOffset" type="number" max="0" step="1" value="${Math.min(0, Number(condition.targetOffset) || 0)}" title="Reference close candle offset"><input data-field="value" type="number" step="any" value="${condition.value ?? ''}" placeholder="Lower/value" title="Numeric target value"><input data-field="value2" type="number" step="any" value="${condition.value2 ?? ''}" placeholder="Upper" title="Upper bound for range"><button data-remove-condition aria-label="Remove condition">×</button></div>`;
+  return `<div class="custom-condition" data-kind="${kind}" data-index="${index}">${sideControls(condition.left, 'left')}<select data-field="operator" class="cc-operator">${operators}</select>${sideControls(condition.right, 'right', condition.operator)}<select data-field="connector" class="cc-connector" title="Join with the next condition">${['AND', 'OR'].map(value => `<option value="${value}" ${(condition.connector || 'AND') === value ? 'selected' : ''}>${value}</option>`).join('')}</select><button data-remove-condition aria-label="Remove condition">×</button></div>`;
 }
 function renderCustomConditions() {
   $('#entryConditions').innerHTML = customDraft.entryConditions.map((condition, index) => conditionRow('entryConditions', condition, index)).join('');
@@ -843,22 +927,40 @@ function renderCustomConditions() {
   $('#customStopLossType').value = customDraft.stopLossType || 'PERCENT';
   $('#customProfitTarget').value = customDraft.profitTarget || 0;
   $('#customProfitTargetType').value = customDraft.profitTargetType || 'PERCENT';
-  $('#entryLogic').value = customDraft.entryLogic || 'AND';
-  $('#exitLogic').value = customDraft.exitLogic || 'AND';
   $$('.custom-condition').forEach(row => {
+    const conditionAt = () => customDraft[row.dataset.kind][Number(row.dataset.index)];
+    row.querySelectorAll('[data-param]').forEach(input => input.onchange = () => {
+      const condition = conditionAt(), side = condition[input.dataset.side];
+      side.params ||= {};
+      side.params[input.dataset.param] = Number(input.value);
+    });
     row.querySelectorAll('[data-field]').forEach(input => input.onchange = () => {
-      const condition = customDraft[row.dataset.kind][Number(row.dataset.index)];
-      condition[input.dataset.field] = ['period', 'value', 'value2', 'candleOffset', 'targetOffset'].includes(input.dataset.field) ? Number(input.value) : input.value;
+      const condition = conditionAt(), path = input.dataset.field;
+      if (path === 'left.indicator' || path === 'right.indicator') {
+        const side = condition[path.split('.')[0]];
+        side.indicator = input.value;
+        if (side.indicator === 'NUMBER') { side.params = {}; side.signal = null; }
+        else {
+          const defaults = conditionParamsObj(side.indicator);
+          side.params = Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, side.params && side.params[key] != null ? side.params[key] : value]));
+          const signals = conditionSignals(side.indicator);
+          if (signals && !signals.some(([key]) => key === side.signal)) side.signal = defaultSignal(side.indicator);
+        }
+        renderCustomConditions();
+        return;
+      }
+      setPath(condition, path, input.value);
+      if (path === 'operator') renderCustomConditions();
     });
     row.querySelector('[data-remove-condition]').onclick = () => { customDraft[row.dataset.kind].splice(Number(row.dataset.index), 1); renderCustomConditions(); };
   });
 }
 function addCustomCondition(kind) {
-  customDraft[kind].push({ indicator: 'RSI', period: 14, candleOffset: 0, operator: kind === 'entryConditions' ? 'below' : 'above', targetMode: 'NUMBER', targetOffset: 0, value: kind === 'entryConditions' ? 30 : 70 });
+  customDraft[kind].push({ left: { indicator: 'RSI', params: { period: 14 }, signal: null, offset: 0 }, operator: kind === 'entryConditions' ? 'below' : 'above', right: { indicator: 'NUMBER', params: {}, signal: null, offset: 0, number: kind === 'entryConditions' ? 30 : 70, number2: '' }, connector: 'AND' });
   renderCustomConditions();
 }
 function resetCustomStrategy() {
-  customDraft = { entryLogic: 'AND', exitLogic: 'AND', entryConditions: [{ indicator: 'RSI', period: 14, candleOffset: 0, operator: 'below', targetMode: 'NUMBER', targetOffset: 0, value: 30 }], exitConditions: [{ indicator: 'RSI', period: 14, candleOffset: 0, operator: 'above', targetMode: 'NUMBER', targetOffset: 0, value: 70 }], profitTargetType: 'PERCENT', profitTarget: 0, stopLossType: 'PERCENT', stopLoss: 0 };
+  customDraft = { entryConditions: [{ left: { indicator: 'RSI', params: { period: 14 }, signal: null, offset: 0 }, operator: 'below', right: { indicator: 'NUMBER', params: {}, signal: null, offset: 0, number: 30, number2: '' }, connector: 'AND' }], exitConditions: [{ left: { indicator: 'RSI', params: { period: 14 }, signal: null, offset: 0 }, operator: 'above', right: { indicator: 'NUMBER', params: {}, signal: null, offset: 0, number: 70, number2: '' }, connector: 'AND' }], profitTargetType: 'PERCENT', profitTarget: 0, stopLossType: 'PERCENT', stopLoss: 0 };
   $('#customStrategyName').value = ''; $('#savedCustomStrategies').value = ''; renderCustomConditions();
 }
 async function loadCustomStrategies() {
@@ -878,11 +980,11 @@ function useCustomStrategy(id) {
   const strategy = customStrategies.get(id);
   if (!strategy) return;
   customDraft = JSON.parse(JSON.stringify(strategy.config));
-  customDraft.entryLogic ||= 'AND'; customDraft.exitLogic ||= 'AND';
   customDraft.stopLossType ||= 'PERCENT'; customDraft.profitTargetType ||= 'PERCENT';
   customDraft.profitTarget ||= 0;
-  customDraft.entryConditions.forEach(condition => { condition.candleOffset ??= 0; condition.targetMode ||= 'NUMBER'; condition.targetOffset ??= 0; });
-  customDraft.exitConditions.forEach(condition => { condition.candleOffset ??= 0; condition.targetMode ||= 'NUMBER'; condition.targetOffset ??= 0; });
+  customDraft.entryConditions.forEach(condition => { normalizeCondition(condition); });
+  customDraft.exitConditions.forEach(condition => { normalizeCondition(condition); });
+  finalizeLogic(customDraft.entryConditions, customDraft.entryLogic); finalizeLogic(customDraft.exitConditions, customDraft.exitLogic);
   $('#customStrategyName').value = strategy.name; $('#savedCustomStrategies').value = id; renderCustomConditions();
   $('#strategy').value = `CUSTOM:${id}`; $('#strategy').dispatchEvent(new Event('change'));
 }
@@ -890,16 +992,17 @@ function syncCustomDraft() {
   $$('.custom-condition').forEach(row => {
     const condition = customDraft[row.dataset.kind][Number(row.dataset.index)];
     if (!condition) return;
-    row.querySelectorAll('[data-field]').forEach(input => {
-      condition[input.dataset.field] = ['period', 'value', 'value2', 'candleOffset', 'targetOffset'].includes(input.dataset.field) ? Number(input.value) : input.value;
+    row.querySelectorAll('[data-param]').forEach(input => {
+      const side = condition[input.dataset.side];
+      side.params ||= {};
+      side.params[input.dataset.param] = Number(input.value);
     });
+    row.querySelectorAll('[data-field]').forEach(input => { setPath(condition, input.dataset.field, input.value); });
   });
   customDraft.stopLoss = Math.max(0, Number($('#customStopLoss').value) || 0);
   customDraft.stopLossType = $('#customStopLossType').value;
   customDraft.profitTarget = Math.max(0, Number($('#customProfitTarget').value) || 0);
   customDraft.profitTargetType = $('#customProfitTargetType').value;
-  customDraft.entryLogic = $('#entryLogic').value;
-  customDraft.exitLogic = $('#exitLogic').value;
 }
 async function saveCustomStrategy() {
   const name = $('#customStrategyName').value.trim();
@@ -1038,7 +1141,7 @@ async function setup() {
     $('#strategyParams').innerHTML = s ? '<div class="strategy-params">' + s.params.map(p => `<label>${p.label}<input data-k="${p.k}" type="number" value="${p.def}" min="1" max="200"></label>`).join('') + '</div>' : '';
     const custom = customStrategies.get($('#strategy').value.replace('CUSTOM:', ''));
     const targetLabel = (value, type) => type === 'AMOUNT' ? `₹${value}` : type === 'POINTS' ? `${value} pt` : `${value}%`;
-    $('#strategySummary').innerHTML = custom ? `<div>Custom strategy: <span>${escapeHtml(custom.name)}</span> · ${custom.config.entryConditions.length} buy rule${custom.config.entryConditions.length === 1 ? '' : 's'} (${custom.config.entryLogic || 'AND'}) · ${custom.config.exitConditions.length} exit rule${custom.config.exitConditions.length === 1 ? '' : 's'} (${custom.config.exitLogic || 'AND'})${custom.config.profitTarget ? ` · Target: <span>${targetLabel(custom.config.profitTarget, custom.config.profitTargetType || 'PERCENT')}</span>` : ''}${custom.config.stopLoss ? ` · Stop: <span>${targetLabel(custom.config.stopLoss, custom.config.stopLossType || 'PERCENT')}</span>` : ''}</div>` : '';
+    $('#strategySummary').innerHTML = custom ? `<div>Custom strategy: <span>${escapeHtml(custom.name)}</span> · ${custom.config.entryConditions.length} buy rule${custom.config.entryConditions.length === 1 ? '' : 's'} · ${custom.config.exitConditions.length} exit rule${custom.config.exitConditions.length === 1 ? '' : 's'}${custom.config.profitTarget ? ` · Target: <span>${targetLabel(custom.config.profitTarget, custom.config.profitTargetType || 'PERCENT')}</span>` : ''}${custom.config.stopLoss ? ` · Stop: <span>${targetLabel(custom.config.stopLoss, custom.config.stopLossType || 'PERCENT')}</span>` : ''}</div>` : '';
   };
   $('#strategy').dispatchEvent(new Event('change'));
   $('#applyStrategy').onclick = renderStrategy;
@@ -1132,7 +1235,9 @@ function computeStrategy(name, params, data) {
   return s.compute(data, params);
 }
 function customSeries(condition, data) {
-  const close = data.map(c => c.close), period = Math.max(2, Number(condition.period) || 14);
+  const close = data.map(c => c.close), params = condition.params || {};
+  const period = Math.max(2, Number(params.period ?? condition.period) || 14);
+  const setting = (key, fallback) => Number(params[key] ?? condition[key] ?? fallback);
   if (condition.indicator === 'OPEN') return data.map(c => c.open);
   if (condition.indicator === 'HIGH') return data.map(c => c.high);
   if (condition.indicator === 'LOW') return data.map(c => c.low);
@@ -1145,53 +1250,68 @@ function customSeries(condition, data) {
   if (condition.indicator === 'TEMA') { const first = ema(close, period), second = ema(first.map(value => value ?? close[0]), period), third = ema(second.map(value => value ?? close[0]), period); return first.map((value, i) => value == null || second[i] == null || third[i] == null ? null : 3 * value - 3 * second[i] + third[i]); }
   if (condition.indicator === 'HMA') { const half = wma(close, Math.max(2, Math.floor(period / 2))), full = wma(close, period), raw = close.map((_, i) => half[i] == null || full[i] == null ? 0 : 2 * half[i] - full[i]); return wma(raw, Math.max(2, Math.floor(Math.sqrt(period)))); }
   if (condition.indicator === 'KAMA') { let value = close[0]; return close.map((price, i) => { if (i < period) return null; const change = Math.abs(price - close[i - period]), volatility = close.slice(i - period + 1, i + 1).reduce((sum, item, j, values) => j ? sum + Math.abs(item - values[j - 1]) : sum, 0), smooth = (change / (volatility || 1) * (.6667 - .0645) + .0645) ** 2; value += smooth * (price - value); return value; }); }
-  if (condition.indicator === 'SAR') { let sar = data[0].low, ep = data[0].high, af = .02, rising = true; return data.map((candle, i) => { if (!i) return sar; sar += af * (ep - sar); if (rising && candle.low < sar) { rising = false; sar = ep; ep = candle.low; af = .02; } else if (!rising && candle.high > sar) { rising = true; sar = ep; ep = candle.high; af = .02; } else if (rising && candle.high > ep) { ep = candle.high; af = Math.min(.2, af + .02); } else if (!rising && candle.low < ep) { ep = candle.low; af = Math.min(.2, af + .02); } return sar; }); }
-  if (condition.indicator === 'SUPERTREND') { const atr = sma(trueRange(data), period); let upper, lower, trend = 1; return data.map((candle, i) => { if (atr[i] == null) return null; const mid = (candle.high + candle.low) / 2, bu = mid + 3 * atr[i], bl = mid - 3 * atr[i]; upper = i && upper != null && close[i - 1] <= upper ? Math.min(bu, upper) : bu; lower = i && lower != null && close[i - 1] >= lower ? Math.max(bl, lower) : bl; if (close[i] > upper) trend = 1; else if (close[i] < lower) trend = -1; return trend === 1 ? lower : upper; }); }
+  if (condition.indicator === 'SAR') { const afStart = setting('accel', .02), afMax = setting('maxAccel', .2); let sar = data[0].low, ep = data[0].high, af = afStart, rising = true; return data.map((candle, i) => { if (!i) return sar; sar += af * (ep - sar); if (rising && candle.low < sar) { rising = false; sar = ep; ep = candle.low; af = afStart; } else if (!rising && candle.high > sar) { rising = true; sar = ep; ep = candle.high; af = afStart; } else if (rising && candle.high > ep) { ep = candle.high; af = Math.min(afMax, af + afStart); } else if (!rising && candle.low < ep) { ep = candle.low; af = Math.min(afMax, af + afStart); } return sar; }); }
+  if (condition.indicator === 'SUPERTREND') { const atr = sma(trueRange(data), Math.max(2, setting('atrPeriod', 10))), mult = setting('mult', 3); let upper, lower, trend = 1; return data.map((candle, i) => { if (atr[i] == null) return null; const mid = (candle.high + candle.low) / 2, bu = mid + mult * atr[i], bl = mid - mult * atr[i]; upper = i && upper != null && close[i - 1] <= upper ? Math.min(bu, upper) : bu; lower = i && lower != null && close[i - 1] >= lower ? Math.max(bl, lower) : bl; if (close[i] > upper) trend = 1; else if (close[i] < lower) trend = -1; return trend === 1 ? lower : upper; }); }
   if (condition.indicator === 'RSI') return rsi(close, period);
-  if (condition.indicator === 'MACD') { const fast = ema(close, Math.max(2, Math.floor(period / 2))), slow = ema(close, period); return close.map((_, i) => fast[i] == null || slow[i] == null ? null : fast[i] - slow[i]); }
-  if (condition.indicator === 'STOCH') return stoch(data, period, 3).k;
+  if (condition.indicator === 'MACD') { const fast = ema(close, Math.max(2, setting('fast', 12))), slow = ema(close, Math.max(2, setting('slow', 26))), macd = close.map((_, i) => fast[i] == null || slow[i] == null ? null : fast[i] - slow[i]), signal = ema(macd.map(x => x ?? 0), Math.max(1, setting('signal', 9))), sig = condition.signal || 'histogram'; if (sig === 'macd') return macd; if (sig === 'signal') return signal; return macd.map((v, i) => v == null || signal[i] == null ? null : v - signal[i]); }
+  if (condition.indicator === 'STOCH') { const s = stoch(data, Math.max(2, setting('k', 14)), Math.max(1, setting('d', 3))); return condition.signal === 'd' ? s.d : s.k; }
   if (condition.indicator === 'MFI') return mfi(data, period);
   if (condition.indicator === 'CCI') return cci(data, period);
   if (condition.indicator === 'WILLIAMS_R') return williamsR(data, period);
   if (condition.indicator === 'ROC') return close.map((value, i) => i < period ? null : (value - close[i - period]) / close[i - period] * 100);
   if (condition.indicator === 'MOM') return close.map((value, i) => i < period ? null : value - close[i - period]);
   if (condition.indicator === 'ATR') return sma(trueRange(data), period);
-  if (condition.indicator === 'ADX') return adxValues(data, period).adx;
-  if (condition.indicator === 'AROON') return data.map((_, i) => { if (i < period - 1) return null; const highs = data.slice(i - period + 1, i + 1).map(c => c.high), lows = data.slice(i - period + 1, i + 1).map(c => c.low); return 100 * (highs.lastIndexOf(Math.max(...highs)) - lows.lastIndexOf(Math.min(...lows))) / period; });
+  if (condition.indicator === 'ADX') { const a = adxValues(data, period); if (condition.signal === 'dip') return a.dip; if (condition.signal === 'din') return a.din; return a.adx; }
+  if (condition.indicator === 'AROON') { const sig = condition.signal || 'osc'; const up = data.map((_, i) => { if (i < period - 1) return null; const highs = data.slice(i - period + 1, i + 1).map(c => c.high); return (highs.lastIndexOf(Math.max(...highs)) + 1) / period * 100; }), down = data.map((_, i) => { if (i < period - 1) return null; const lows = data.slice(i - period + 1, i + 1).map(c => c.low); return (lows.lastIndexOf(Math.min(...lows)) + 1) / period * 100; }); if (sig === 'up') return up; if (sig === 'down') return down; return up.map((v, i) => v == null || down[i] == null ? null : v - down[i]); }
   if (condition.indicator === 'VWAP') { let priceVolume = 0, volume = 0; return data.map(candle => { priceVolume += (candle.high + candle.low + candle.close) / 3 * candle.volume; volume += candle.volume; return priceVolume / (volume || 1); }); }
   if (condition.indicator === 'OBV') { let obv = 0; return close.map((value, i) => { if (i) obv += value >= close[i - 1] ? data[i].volume : -data[i].volume; return obv; }); }
   if (condition.indicator === 'ADL') { let adl = 0; return data.map(c => adl += ((c.close - c.low) - (c.high - c.close)) / (c.high - c.low || 1) * c.volume); }
   if (condition.indicator === 'CMF') { const flow = data.map(c => ((c.close - c.low) - (c.high - c.close)) / (c.high - c.low || 1) * c.volume); return flow.map((_, i) => i < period - 1 ? null : flow.slice(i - period + 1, i + 1).reduce((sum, value) => sum + value, 0) / data.slice(i - period + 1, i + 1).reduce((sum, c) => sum + c.volume, 0)); }
   if (condition.indicator === 'FI') return ema(close.map((value, i) => i ? (value - close[i - 1]) * data[i].volume : 0), period);
-  if (condition.indicator === 'BB_UPPER' || condition.indicator === 'BB_MID' || condition.indicator === 'BB_LOWER') { const mid = sma(close, period), deviation = mid.map((mean, i) => mean == null ? null : Math.sqrt(close.slice(i - period + 1, i + 1).reduce((sum, value) => sum + (value - mean) ** 2, 0) / period)); return mid.map((value, i) => value == null ? null : condition.indicator === 'BB_MID' ? value : value + (condition.indicator === 'BB_UPPER' ? 2 : -2) * deviation[i]); }
-  if (condition.indicator === 'DC_HIGH' || condition.indicator === 'DC_LOW') return data.map((_, i) => i < period - 1 ? null : (condition.indicator === 'DC_HIGH' ? Math.max(...data.slice(i - period + 1, i + 1).map(c => c.high)) : Math.min(...data.slice(i - period + 1, i + 1).map(c => c.low))));
-  if (condition.indicator === 'KC_UPPER' || condition.indicator === 'KC_LOWER') { const mid = ema(close, period), atr = sma(trueRange(data), period); return mid.map((value, i) => value == null || atr[i] == null ? null : value + (condition.indicator === 'KC_UPPER' ? 2 : -2) * atr[i]); }
+  if (condition.indicator === 'BB' || condition.indicator === 'BB_UPPER' || condition.indicator === 'BB_MID' || condition.indicator === 'BB_LOWER') { const sig = condition.indicator === 'BB' ? (condition.signal || 'mid') : condition.indicator === 'BB_UPPER' ? 'upper' : condition.indicator === 'BB_LOWER' ? 'lower' : 'mid', mid = sma(close, period), deviation = mid.map((mean, i) => mean == null ? null : Math.sqrt(close.slice(i - period + 1, i + 1).reduce((sum, value) => sum + (value - mean) ** 2, 0) / period)), mult = setting('std', 2); return mid.map((value, i) => value == null ? null : sig === 'upper' ? value + mult * deviation[i] : sig === 'lower' ? value - mult * deviation[i] : value); }
+  if (condition.indicator === 'DC' || condition.indicator === 'DC_HIGH' || condition.indicator === 'DC_LOW') { const sig = condition.indicator === 'DC' ? (condition.signal || 'high') : condition.indicator === 'DC_HIGH' ? 'high' : 'low'; return data.map((_, i) => i < period - 1 ? null : sig === 'low' ? Math.min(...data.slice(i - period + 1, i + 1).map(c => c.low)) : Math.max(...data.slice(i - period + 1, i + 1).map(c => c.high))); }
+  if (condition.indicator === 'KC' || condition.indicator === 'KC_UPPER' || condition.indicator === 'KC_LOWER') { const sig = condition.indicator === 'KC' ? (condition.signal || 'mid') : condition.indicator === 'KC_UPPER' ? 'upper' : 'lower', mid = ema(close, period), atr = sma(trueRange(data), period), mult = setting('mult', 2); return mid.map((value, i) => value == null || atr[i] == null ? null : sig === 'upper' ? value + mult * atr[i] : sig === 'lower' ? value - mult * atr[i] : value); }
   return close;
 }
-function conditionPass(condition, values, index, data) {
-  const candleIndex = index + Math.min(0, Math.trunc(Number(condition.candleOffset) || 0));
-  const referenceIndex = index + Math.min(0, Math.trunc(Number(condition.targetOffset) || 0));
-  const value = values[candleIndex], target = condition.targetMode === 'CLOSE' ? data[referenceIndex]?.close : Number(condition.value);
+function conditionPass(condition, leftValues, rightValues, index, data) {
+  const candleIndex = index + Math.min(0, Math.trunc(Number(condition.left.offset) || 0));
+  const value = leftValues[candleIndex], previous = leftValues[candleIndex - 1];
+  let target, previousTarget;
+  if (condition.right.indicator === 'NUMBER') { target = Number(condition.right.number); previousTarget = target; }
+  else {
+    const referenceIndex = index + Math.min(0, Math.trunc(Number(condition.right.offset) || 0));
+    target = rightValues[referenceIndex]; previousTarget = rightValues[referenceIndex - 1];
+  }
   if (value == null || !Number.isFinite(target)) return false;
-  const previous = values[candleIndex - 1];
-  const previousTarget = condition.targetMode === 'CLOSE' ? data[referenceIndex - 1]?.close : target;
   if (condition.operator === 'crossesAbove') return candleIndex > 0 && previous != null && previousTarget != null && previous <= previousTarget && value > target;
   if (condition.operator === 'crossesBelow') return candleIndex > 0 && previous != null && previousTarget != null && previous >= previousTarget && value < target;
   if (condition.operator === 'aboveEqual') return value >= target;
   if (condition.operator === 'belowEqual') return value <= target;
-  if (condition.operator === 'between' || condition.operator === 'outside') { const upper = Number(condition.value2), low = Math.min(target, upper), high = Math.max(target, upper); if (!Number.isFinite(upper)) return false; return condition.operator === 'between' ? value >= low && value <= high : value < low || value > high; }
+  if (condition.operator === 'between' || condition.operator === 'outside') {
+    if (condition.right.indicator !== 'NUMBER') return false;
+    const upper = Number(condition.right.number2), low = Math.min(target, upper), high = Math.max(target, upper);
+    if (!Number.isFinite(upper)) return false;
+    return condition.operator === 'between' ? value >= low && value <= high : value < low || value > high;
+  }
   return condition.operator === 'below' ? value < target : value > target;
 }
 function computeCustomStrategy(config, data, params = {}) {
   if (!config?.entryConditions?.length || !data?.length) return [];
-  const entry = config.entryConditions.map(c => ({ condition: c, values: customSeries(c, data) }));
-  const exit = (config.exitConditions || []).map(c => ({ condition: c, values: customSeries(c, data) }));
+  config = JSON.parse(JSON.stringify(config));
+  config.entryConditions.forEach(normalizeCondition); (config.exitConditions || []).forEach(normalizeCondition);
+  finalizeLogic(config.entryConditions, config.entryLogic); finalizeLogic(config.exitConditions, config.exitLogic);
+  const entry = config.entryConditions.map(c => ({ condition: c, left: customSeries(c.left, data), right: c.right.indicator === 'NUMBER' ? null : customSeries(c.right, data) }));
+  const exit = (config.exitConditions || []).map(c => ({ condition: c, left: customSeries(c.left, data), right: c.right.indicator === 'NUMBER' ? null : customSeries(c.right, data) }));
   const stopLoss = Math.max(0, Number(config.stopLoss) || 0), profitTarget = Math.max(0, Number(config.profitTarget) || 0), quantity = Math.max(1, Number(params.quantity) || 1), signals = [];
   const targetPrice = (entry, value, type, direction) => type === 'POINTS' ? entry + direction * value : type === 'AMOUNT' ? entry + direction * value / quantity : entry * (1 + direction * value / 100);
-  const matches = (rules, logic, index) => logic === 'OR' ? rules.some(rule => conditionPass(rule.condition, rule.values, index, data)) : rules.every(rule => conditionPass(rule.condition, rule.values, index, data));
+  const matches = (rules, index) => rules.reduce((result, rule, i) => {
+    const pass = conditionPass(rule.condition, rule.left, rule.right, index, data);
+    if (i === 0) return pass;
+    return (rule.condition.connector || 'AND') === 'OR' ? result || pass : result && pass;
+  }, false);
   let inPosition = false, entryPrice = 0;
   data.forEach((candle, index) => {
-    if (!inPosition && matches(entry, config.entryLogic || 'AND', index)) {
+    if (!inPosition && matches(entry, index)) {
       inPosition = true; entryPrice = candle.close;
       signals.push({ type: 'buy', index, time: candle.time, price: candle.close });
     } else {
@@ -1199,7 +1319,7 @@ function computeCustomStrategy(config, data, params = {}) {
       const profitPrice = profitTarget > 0 ? targetPrice(entryPrice, profitTarget, config.profitTargetType || 'PERCENT', 1) : null;
       const stopped = inPosition && stopPrice != null && candle.low <= stopPrice;
       const targeted = inPosition && profitPrice != null && candle.high >= profitPrice;
-      const indicatorExit = inPosition && exit.length && matches(exit, config.exitLogic || 'AND', index);
+      const indicatorExit = inPosition && exit.length && matches(exit, index);
       if (!inPosition || (!stopped && !targeted && !indicatorExit)) return;
       inPosition = false;
       signals.push({ type: 'sell', index, time: candle.time, price: stopped ? stopPrice : targeted ? profitPrice : candle.close, reason: stopped ? 'STOP' : targeted ? 'TARGET' : 'EXIT' });
