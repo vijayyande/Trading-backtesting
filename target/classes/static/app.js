@@ -79,6 +79,11 @@ function initChart() {
     localization: { timeFormatter: t => new Date(t * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }
   });
   window.addEventListener('resize', () => chart.applyOptions({ width: $('#chart').clientWidth, height: $('#chart').clientHeight }));
+  chart.subscribeCrosshairMove(param => {
+    if (!param.time) { updateQuote(); return; }
+    const idx = candleIndexAt(param.time);
+    if (idx >= 0) showHoverQuote(idx);
+  });
   setSeries();
 }
 function setSeries() {
@@ -670,9 +675,31 @@ function layoutPanes() {
   for (let i = 1; i < panes.length; i++) panes[i].setStretchFactor(1);
 }
 function updateQuote() { const now = candles.at(-1), previous = candles.at(-2); if (!now || !previous) return; const pct = (now.close - previous.close) / previous.close * 100; $('#open').textContent = now.open.toFixed(2); $('#high').textContent = now.high.toFixed(2); $('#low').textContent = now.low.toFixed(2); $('#close').textContent = now.close.toFixed(2); $('#change').textContent = `${pct >= 0 ? 'UP +' : 'DOWN '}${pct.toFixed(2)}%`; $('#change').style.color = pct >= 0 ? '#5ed69d' : '#f27675'; }
+function candleIndexAt(seconds) {
+  let lo = 0, hi = candles.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const t = Math.floor(candles[mid].time / 1000);
+    if (t === seconds) return mid;
+    if (t < seconds) lo = mid + 1; else hi = mid - 1;
+  }
+  return -1;
+}
+function showHoverQuote(idx) {
+  const c = candles[idx], prev = candles[idx - 1];
+  if (!c) return;
+  $('#open').textContent = c.open.toFixed(2);
+  $('#high').textContent = c.high.toFixed(2);
+  $('#low').textContent = c.low.toFixed(2);
+  $('#close').textContent = c.close.toFixed(2);
+  if (!prev) return;
+  const pct = (c.close - prev.close) / prev.close * 100;
+  $('#change').textContent = `${pct >= 0 ? 'UP +' : 'DOWN '}${pct.toFixed(2)}%`;
+  $('#change').style.color = pct >= 0 ? '#5ed69d' : '#f27675';
+}
 let loadRetryTimer = null, loadRetries = 0;
 async function load() {
-  const provider = $('#provider').value || 'DEMO', symbol = $('#symbol').value.trim() || 'NSE:RELIANCE';
+  const provider = $('#provider').value || 'DEMO', symbol = $('#symbol').value.trim() || 'NSE:NIFTY 50';
   cancelDraft();
   clearInterval(liveTimer);
   if (loadRetryTimer) { clearTimeout(loadRetryTimer); loadRetryTimer = null; }
@@ -696,7 +723,7 @@ async function load() {
       const backfillResponse = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${backfillLimit}&to=${to}`);
       if (!backfillResponse.ok) break;
       const older = await backfillResponse.json();
-      if (provider !== $('#provider').value || symbol !== ($('#symbol').value.trim() || 'NSE:RELIANCE') || reqInterval !== interval) return;
+      if (provider !== $('#provider').value || symbol !== ($('#symbol').value.trim() || 'NSE:NIFTY 50') || reqInterval !== interval) return;
       if (!older.candles || !older.candles.length) { noMoreHistory = true; break; }
       if (older.candles[0].time >= candles[0].time) break;
       candles = [...older.candles, ...candles];
@@ -723,10 +750,10 @@ let liveFailures = 0;
 async function refreshLiveCandle() {
   const provider = $('#provider').value || 'DEMO';
   const reqInterval = interval;
-  const reqSymbol = $('#symbol').value.trim() || 'NSE:RELIANCE';
+  const reqSymbol = $('#symbol').value.trim() || 'NSE:NIFTY 50';
   try {
     const response = await fetch(`/api/live-candle?provider=${provider}&symbol=${encodeURIComponent(reqSymbol)}&interval=${reqInterval}`);
-    if (provider !== $('#provider').value || reqInterval !== interval || reqSymbol !== ($('#symbol').value.trim() || 'NSE:RELIANCE')) return;
+    if (provider !== $('#provider').value || reqInterval !== interval || reqSymbol !== ($('#symbol').value.trim() || 'NSE:NIFTY 50')) return;
     if (!response.ok) {
       liveFailures++;
       clearInterval(liveTimer);
@@ -761,14 +788,14 @@ async function loadMore() {
   loadingMore = true;
   try {
     const provider = $('#provider').value || 'DEMO';
-    const symbol = $('#symbol').value.trim() || 'NSE:RELIANCE';
+    const symbol = $('#symbol').value.trim() || 'NSE:NIFTY 50';
     const reqInterval = interval;
     const to = Math.floor(candles[0].time / 1000) - 1;
     const logical = chart.timeScale().getVisibleLogicalRange();
     const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${defaultLimit()}&to=${to}`);
     if (!response.ok) return;
     const data = await response.json();
-    if (provider !== $('#provider').value || symbol !== ($('#symbol').value.trim() || 'NSE:RELIANCE') || reqInterval !== interval) return;
+    if (provider !== $('#provider').value || symbol !== ($('#symbol').value.trim() || 'NSE:NIFTY 50') || reqInterval !== interval) return;
     if (!data.candles || !data.candles.length) { noMoreHistory = true; return; }
     const added = data.candles.length;
     candles = [...data.candles, ...candles];
@@ -896,11 +923,11 @@ async function setup() {
   $('#symbol').innerHTML = groups.map(g =>
     `<optgroup label="${g.category}">${g.symbols.map(s => `<option value="${s.value}">${s.label}</option>`).join('')}</optgroup>`
   ).join('');
-  $('#symbol').value = 'NSE:RELIANCE';
+  $('#symbol').value = 'NSE:NIFTY 50';
   $('#backtestSymbols').innerHTML = groups.map(g =>
     `<optgroup label="${g.category}">${g.symbols.map(s => `<option value="${s.value}">${s.label}</option>`).join('')}</optgroup>`
   ).join('');
-  $('#backtestSymbols').value = 'NSE:RELIANCE';
+  $('#backtestSymbols').value = 'NSE:NIFTY 50';
   const today = new Date(), yearAgo = new Date(today); yearAgo.setFullYear(today.getFullYear() - 1);
   $('#backtestStart').value = yearAgo.toISOString().slice(0, 10);
   $('#backtestEnd').value = today.toISOString().slice(0, 10);

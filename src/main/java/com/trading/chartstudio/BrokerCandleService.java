@@ -49,6 +49,127 @@ public class BrokerCandleService {
     private final ConcurrentHashMap<String, LiveBar> angelLiveBars = new ConcurrentHashMap<>();
     private volatile String lastAngelError;
 
+    private static final java.util.Map<String, String> ANGEL_INDEX_TOKENS = java.util.Map.ofEntries(
+        java.util.Map.entry("NIFTY 50", "99926000"),
+        java.util.Map.entry("NIFTY IT", "99926001"),
+        java.util.Map.entry("NIFTY NEXT 50", "99926002"),
+        java.util.Map.entry("NIFTY MIDCAP 100", "99926003"),
+        java.util.Map.entry("NIFTY SMALLCAP 50", "99926004"),
+        java.util.Map.entry("NIFTY 500", "99926005"),
+        java.util.Map.entry("NIFTY AUTO", "99926006"),
+        java.util.Map.entry("NIFTY PHARMA", "99926007"),
+        java.util.Map.entry("NIFTY FMCG", "99926008"),
+        java.util.Map.entry("NIFTY BANK", "99926009"),
+        java.util.Map.entry("NIFTY METAL", "99926010"),
+        java.util.Map.entry("NIFTY REALTY", "99926011"),
+        java.util.Map.entry("NIFTY MEDIA", "99926012"),
+        java.util.Map.entry("NIFTY ENERGY", "99926013"),
+        java.util.Map.entry("NIFTY PSU BANK", "99926014"),
+        java.util.Map.entry("NIFTY FIN SERVICE", "99926015"),
+        java.util.Map.entry("NIFTY HEALTHCARE", "99926016"),
+        java.util.Map.entry("NIFTY INFRA", "99926017"),
+        java.util.Map.entry("INDIA VIX", "99926018"),
+        java.util.Map.entry("NIFTY MNC", "99926019"),
+        java.util.Map.entry("NIFTY SERV SECTOR", "99926020"),
+        java.util.Map.entry("NIFTY CONSUMPTION", "99926021"),
+        java.util.Map.entry("NIFTY COMMODITIES", "99926022"),
+        java.util.Map.entry("NIFTY OIL & GAS", "99926023"),
+        java.util.Map.entry("NIFTY INDIA DIGITAL", "99926024"));
+
+    private static final java.util.Map<String, Double> DEMO_BASE_PRICE = java.util.Map.ofEntries(
+        java.util.Map.entry("NSE:NIFTY 50", 25000.0),
+        java.util.Map.entry("NSE:NIFTY BANK", 54500.0),
+        java.util.Map.entry("NSE:NIFTY IT", 41500.0),
+        java.util.Map.entry("NSE:NIFTY NEXT 50", 72000.0),
+        java.util.Map.entry("NSE:NIFTY MIDCAP 100", 61000.0),
+        java.util.Map.entry("NSE:NIFTY SMALLCAP 50", 17500.0),
+        java.util.Map.entry("NSE:NIFTY 500", 24000.0),
+        java.util.Map.entry("NSE:NIFTY AUTO", 26500.0),
+        java.util.Map.entry("NSE:NIFTY PHARMA", 23500.0),
+        java.util.Map.entry("NSE:NIFTY FMCG", 62000.0),
+        java.util.Map.entry("NSE:NIFTY METAL", 10300.0),
+        java.util.Map.entry("NSE:NIFTY REALTY", 1150.0),
+        java.util.Map.entry("NSE:NIFTY MEDIA", 2050.0),
+        java.util.Map.entry("NSE:NIFTY ENERGY", 31500.0),
+        java.util.Map.entry("NSE:NIFTY CONSUMPTION", 11300.0),
+        java.util.Map.entry("NSE:NIFTY INFRA", 9200.0),
+        java.util.Map.entry("NSE:NIFTY MNC", 31000.0),
+        java.util.Map.entry("NSE:NIFTY PSU BANK", 7300.0),
+        java.util.Map.entry("NSE:NIFTY PVT BANK", 26500.0),
+        java.util.Map.entry("NSE:NIFTY SERV SECTOR", 31000.0),
+        java.util.Map.entry("NSE:NIFTY FIN SERVICE", 25800.0),
+        java.util.Map.entry("NSE:NIFTY HEALTHCARE", 13800.0),
+        java.util.Map.entry("NSE:NIFTY OIL & GAS", 12300.0),
+        java.util.Map.entry("NSE:NIFTY COMMODITIES", 9200.0),
+        java.util.Map.entry("NSE:NIFTY INDIA DIGITAL", 8200.0),
+        java.util.Map.entry("MCX:GOLD", 76000.0),
+        java.util.Map.entry("MCX:GOLDM", 76000.0),
+        java.util.Map.entry("MCX:GOLDGUINEA", 76000.0),
+        java.util.Map.entry("MCX:GOLDPETAL", 7600.0),
+        java.util.Map.entry("MCX:SILVER", 96000.0),
+        java.util.Map.entry("MCX:SILVERM", 96000.0),
+        java.util.Map.entry("MCX:SILVERMC", 96000.0),
+        java.util.Map.entry("MCX:CRUDEOIL", 6300.0),
+        java.util.Map.entry("MCX:NATURALGAS", 240.0),
+        java.util.Map.entry("MCX:COPPER", 860.0),
+        java.util.Map.entry("MCX:ZINC", 275.0),
+        java.util.Map.entry("MCX:LEAD", 195.0),
+        java.util.Map.entry("MCX:LEADMINI", 195.0),
+        java.util.Map.entry("MCX:ALUMINIUM", 245.0),
+        java.util.Map.entry("MCX:ALUMINIUMMINI", 245.0),
+        java.util.Map.entry("MCX:NICKEL", 1750.0),
+        java.util.Map.entry("MCX:COTTON", 56500.0),
+        java.util.Map.entry("MCX:CPO", 1050.0),
+        java.util.Map.entry("MCX:MENTHAOIL", 1950.0),
+        java.util.Map.entry("MCX:CARDAMOM", 30500.0),
+        java.util.Map.entry("MCX:CASTORSEED", 6100.0),
+        java.util.Map.entry("MCX:JEERA", 28500.0),
+        java.util.Map.entry("MCX:TURMERIC", 15500.0),
+        java.util.Map.entry("MCX:CHANA", 10100.0),
+        java.util.Map.entry("MCX:DHANIYA", 8200.0),
+        java.util.Map.entry("MCX:KAPAS", 1650.0),
+        java.util.Map.entry("MCX:MULTI", 5200.0),
+        java.util.Map.entry("MCX:ENERGY", 4100.0),
+        java.util.Map.entry("MCX:METAL", 4200.0),
+        java.util.Map.entry("MCX:BULLION", 31000.0),
+        java.util.Map.entry("GLOBAL:SPX", 6050.0),
+        java.util.Map.entry("GLOBAL:NDX", 22500.0),
+        java.util.Map.entry("GLOBAL:IXIC", 18500.0),
+        java.util.Map.entry("GLOBAL:DJI", 44500.0),
+        java.util.Map.entry("GLOBAL:NYA", 19500.0),
+        java.util.Map.entry("GLOBAL:RUT", 2400.0),
+        java.util.Map.entry("GLOBAL:VIX", 15.0),
+        java.util.Map.entry("GLOBAL:FTSE", 8900.0),
+        java.util.Map.entry("GLOBAL:DAX", 24500.0),
+        java.util.Map.entry("GLOBAL:CAC", 8100.0),
+        java.util.Map.entry("GLOBAL:SX5E", 5500.0),
+        java.util.Map.entry("GLOBAL:STOXX", 560.0),
+        java.util.Map.entry("GLOBAL:N225", 40500.0),
+        java.util.Map.entry("GLOBAL:HSI", 23500.0),
+        java.util.Map.entry("GLOBAL:SHCOMP", 3500.0),
+        java.util.Map.entry("GLOBAL:CSI300", 4100.0),
+        java.util.Map.entry("GLOBAL:KS11", 2650.0),
+        java.util.Map.entry("GLOBAL:ASX200", 8300.0),
+        java.util.Map.entry("GLOBAL:STI", 3900.0),
+        java.util.Map.entry("GLOBAL:TWII", 22500.0),
+        java.util.Map.entry("GLOBAL:NIFTY 50", 25000.0),
+        java.util.Map.entry("GLOBAL:BOVESPA", 131000.0),
+        java.util.Map.entry("GLOBAL:MXX", 54500.0),
+        java.util.Map.entry("GLOBAL:IMOEX", 3100.0),
+        java.util.Map.entry("GLOBAL:JTOPI", 7100.0),
+        java.util.Map.entry("GLOBAL:SET50", 1400.0),
+        java.util.Map.entry("GLOBAL:VNI", 1300.0),
+        java.util.Map.entry("GLOBAL:FTSE EPRA", 2100.0));
+
+    private static double demoBasePrice(String symbol) {
+        Double fixed = DEMO_BASE_PRICE.get(symbol);
+        if (fixed != null) return fixed;
+        if (symbol.startsWith("NSE:NIFTY")) return 25000;
+        if (symbol.startsWith("GLOBAL:")) return 10000;
+        if (symbol.startsWith("MCX:")) return 5000;
+        return 900 + Math.abs(symbol.hashCode() % 1800);
+    }
+
     private record LiveBar(ChartController.Candle candle, long fetchedAt) {}
 
     public BrokerCandleService(@Value("${zerodha.api-key:}") String zerodhaApiKey,
@@ -207,13 +328,13 @@ public class BrokerCandleService {
     public List<ChartController.Candle> generateDemoTo(String symbol, String interval, int count, long toTimeMs) {
         long seconds = getIntervalSeconds(interval);
         java.util.Random random = new java.util.Random((long) symbol.hashCode() * 31 + interval.hashCode() * 37 + toTimeMs);
-        double price = 900 + Math.abs(symbol.hashCode() % 1800);
+        double price = demoBasePrice(symbol);
         ZoneId ist = ZoneId.of("Asia/Kolkata");
         boolean isDaily = "1d".equals(interval);
         double volScale = Math.max(Math.sqrt(seconds / 86400.0), .06);
         List<ChartController.Candle> result = new ArrayList<>();
-        long currentMs = toTimeMs;
-        int maxIterations = count * 30;
+        long currentMs = floorToIntervalStart(toTimeMs, seconds, isDaily, ist);
+        int maxIterations = Math.max(count * 30, (int) Math.ceil(3.0 * 86400 / seconds));
         int lastSessionDay = -1;
         for (int iter = 0; result.size() < count && iter < maxIterations; iter++) {
             ZonedDateTime zdt = Instant.ofEpochMilli(currentMs).atZone(ist);
@@ -255,6 +376,17 @@ public class BrokerCandleService {
         }
         java.util.Collections.reverse(result);
         return result;
+    }
+
+    private long floorToIntervalStart(long ms, long seconds, boolean isDaily, ZoneId ist) {
+        ZonedDateTime zdt = Instant.ofEpochMilli(ms).atZone(ist);
+        if (isDaily) {
+            return zdt.toLocalDate().atStartOfDay(ist).toInstant().toEpochMilli();
+        }
+        long minutes = Math.max(1, seconds / 60);
+        long minuteOfDay = zdt.getHour() * 60L + zdt.getMinute();
+        long floored = minuteOfDay - Math.floorMod(minuteOfDay, minutes);
+        return zdt.toLocalDate().atTime((int) (floored / 60), (int) (floored % 60)).atZone(ist).toInstant().toEpochMilli();
     }
 
     public List<ChartController.Candle> generateDemoRange(String symbol, String interval, long fromTimeMs, long toTimeMs, int maxCount) {
@@ -631,7 +763,35 @@ public class BrokerCandleService {
             String cacheKey = "angeltoken:" + exchange + ":" + tradingSymbol;
             String cached = angelTokenCache.get(cacheKey);
             if (cached != null) return cached;
-            Map<String, Object> body = Map.of("exchange", exchange, "searchscrip", tradingSymbol);
+            if ("NSE".equals(exchange)) {
+                String idx = ANGEL_INDEX_TOKENS.get(tradingSymbol.toUpperCase(Locale.ROOT));
+                if (idx != null) {
+                    angelTokenCache.put(cacheKey, idx);
+                    return idx;
+                }
+            }
+            List<String> searches = new ArrayList<>();
+            searches.add(tradingSymbol);
+            String noSpace = tradingSymbol.replace(" ", "");
+            if (!noSpace.equals(tradingSymbol)) searches.add(noSpace);
+            String base = tradingSymbol.indexOf(' ') > 0 ? tradingSymbol.substring(0, tradingSymbol.indexOf(' ')) : tradingSymbol;
+            if (!searches.contains(base) && !base.isBlank()) searches.add(base);
+            for (String search : searches) {
+                String token = searchAngelToken(exchange, search, apiKey, accessToken, ip, session);
+                if (token != null) {
+                    angelTokenCache.put(cacheKey, token);
+                    return token;
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String searchAngelToken(String exchange, String search, String apiKey, String accessToken, String ip, HttpSession session) {
+        try {
+            Map<String, Object> body = Map.of("exchange", exchange, "searchscrip", search);
             HttpRequest request = HttpRequest.newBuilder(URI.create(ANGEL_BASE + "/order/v1/searchScrip"))
                 .header("Content-Type", "application/json").header("Accept", "application/json")
                 .header("X-UserType", "USER").header("X-SourceID", "WEB")
@@ -650,13 +810,13 @@ public class BrokerCandleService {
             if (angelAuthFailed(response.body(), session)) return null;
             if (response.statusCode() / 100 != 2) {
                 if (response.statusCode() == 401) invalidateAngelTokens(session);
-                log.warn("Angel searchScrip {} failed HTTP {}: {}", tradingSymbol, response.statusCode(),
+                log.warn("Angel searchScrip {} failed HTTP {}: {}", search, response.statusCode(),
                     response.body().length() > 300 ? response.body().substring(0, 300) : response.body());
                 return null;
             }
             JsonNode data = json.readTree(response.body()).path("data");
             if (!data.isArray() || data.isEmpty()) return null;
-            String spot = null, exact = null, first = null;
+            String spot = null, exact = null, idxSpot = null, first = null;
             for (JsonNode item : data) {
                 String symbol = field(item, "tradingsymbol", "symbol");
                 String exch = field(item, "exchange", "exch_seg");
@@ -664,13 +824,13 @@ public class BrokerCandleService {
                 String token = field(item, "symboltoken", "token");
                 if (token.isBlank() || !exch.equals(exchange)) continue;
                 if (first == null) first = token;
-                if (symbol.equals(tradingSymbol) && exact == null) exact = token;
+                boolean isIndex = type.contains("IDX") || type.contains("INDEX");
+                if (symbol.equalsIgnoreCase(search) && exact == null) exact = token;
+                if (isIndex && idxSpot == null) idxSpot = token;
                 if (("EQ".equals(type) || "AMX_IDX".equals(type)) && spot == null) spot = token;
             }
-            String best = spot != null ? spot : (exact != null ? exact : first);
-            if (best == null || best.isBlank()) return null;
-            angelTokenCache.put(cacheKey, best);
-            return best;
+            String best = idxSpot != null ? idxSpot : (exact != null ? exact : (spot != null ? spot : first));
+            return (best == null || best.isBlank()) ? null : best;
         } catch (Exception e) {
             return null;
         }
