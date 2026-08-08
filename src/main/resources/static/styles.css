@@ -55,6 +55,17 @@ hr{border:0;border-top:1px solid var(--line);margin:23px 0}
 .type-row button{font-family:Manrope;white-space:nowrap;padding:8px 3px}
 .symbol-box{position:relative}.symbol-box span{position:absolute;left:11px;top:9px;color:var(--bar-highlight);font-size:17px}.symbol-box select{padding-left:32px}.symbol-box button{position:absolute;right:6px;top:6px;background:none;border:0;color:var(--bar-highlight);font-size:18px;cursor:pointer;padding:4px 6px;line-height:1;border-radius:3px}.symbol-box button:hover{color:var(--cyan);background:var(--hover-bg)}
 
+/* Index strip above the chart */
+.index-strip{display:flex;align-items:center;gap:10px;padding:7px 24px;background:var(--panel);border-bottom:1px solid var(--line)}
+.index-strip-title{font:9px 'DM Mono';letter-spacing:1.2px;color:var(--text-label);margin-right:4px}
+.index-chip{display:flex;align-items:baseline;gap:7px;background:var(--chip-bg);border:1px solid var(--line-soft-2);border-radius:4px;padding:4px 10px;font:11px 'DM Mono'}
+.ic-label{color:var(--muted);letter-spacing:.3px}
+.ic-value{color:var(--quote-num);font-weight:500}
+.ic-change{font-size:10px}
+.ic-value.up,.ic-change.up{color:var(--green-2)}
+.ic-value.down,.ic-change.down{color:var(--red)}
+.ic-stale{opacity:.5}
+
 /* Indicator bar above the chart */
 .indicator-bar{background:var(--panel);border-bottom:1px solid var(--line);padding:12px 24px 16px}
 .indicator-bar .label{margin-bottom:10px}

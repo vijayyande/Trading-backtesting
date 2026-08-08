@@ -783,6 +783,33 @@ async function refreshLiveCandle() {
   } catch { $('#updated').textContent = 'Live feed reconnecting...'; }
 }
 function startLiveUpdates() { clearInterval(liveTimer); liveFailures = 0; liveTimer = setInterval(refreshLiveCandle, 2500); }
+async function refreshIndices() {
+  const provider = $('#provider').value || 'DEMO';
+  try {
+    const response = await fetch(`/api/indices?provider=${encodeURIComponent(provider)}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    const quotes = new Map((data.indices || []).map(q => [q.symbol, q]));
+    $$('#indexStrip .index-chip').forEach(chip => {
+      const q = quotes.get(chip.dataset.symbol);
+      const valueEl = chip.querySelector('.ic-value');
+      const changeEl = chip.querySelector('.ic-change');
+      if (!q || q.value == null) {
+        valueEl.textContent = '—';
+        changeEl.textContent = q && q.source === 'NOT_CONNECTED' ? 'no feed' : '—';
+        valueEl.className = 'ic-value ic-stale';
+        changeEl.className = 'ic-change ic-stale';
+        return;
+      }
+      const pct = q.changePct ?? 0;
+      const cls = pct >= 0 ? 'up' : 'down';
+      valueEl.textContent = q.value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      changeEl.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+      valueEl.className = 'ic-value ' + cls;
+      changeEl.className = 'ic-change ' + cls;
+    });
+  } catch {}
+}
 async function loadMore() {
   if (loadingMore || noMoreHistory || !candles.length) return;
   loadingMore = true;
@@ -912,6 +939,8 @@ async function setup() {
   setupDrawingTools();
   initDrawingBarToggle();
   restoreDrawings();
+  refreshIndices();
+  setInterval(refreshIndices, 10000);
   chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
     if (!range || range.from == null || !candles.length || loadingMore || noMoreHistory) return;
     const bufferBars = 30;
@@ -942,7 +971,7 @@ async function setup() {
   $('#provider').onchange = async () => {
     const p = providers.find(x => x.id === $('#provider').value);
     $('#providerStatus').textContent = p.status;
-    if (p.id === 'DEMO') { $('#connect').textContent = 'Demo feed active'; load(); return; }
+    if (p.id === 'DEMO') { $('#connect').textContent = 'Demo feed active'; load(); refreshIndices(); return; }
     try {
       var broker = p.id === 'ZERODHA' ? 'zerodha' : p.id.toLowerCase();
       if (broker === 'angel_one') broker = 'angel-one';
@@ -951,6 +980,7 @@ async function setup() {
       else { $('#connect').textContent = account.loggedIn && brokerHasSaved(p.id) ? 'Connect ' + p.name + ' (saved)' : 'Connect ' + p.name; $('#providerStatus').textContent = status.configured ? 'Ready to connect' : p.status; }
     } catch { $('#connect').textContent = 'Connect ' + p.name; }
     load();
+    refreshIndices();
   };
   try { await refreshAccount(); } catch { }
   if ($('#provider').value === 'DEMO') {

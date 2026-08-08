@@ -805,6 +805,56 @@ public class ChartController {
 
     private double round(double n) { return Math.round(n * 100.0) / 100.0; }
 
+    @GetMapping("/indices")
+    public ResponseEntity<?> indices(@RequestParam(defaultValue = "DEMO") String provider, HttpSession session) {
+        String safeProvider = provider.toUpperCase(Locale.ROOT);
+        if (!PROVIDERS.contains(safeProvider)) return ResponseEntity.badRequest().body("Unknown provider");
+        List<IndexQuote> quotes = new java.util.ArrayList<>();
+        String[][] defs = {
+            {"NSE:NIFTY 50", "NIFTY 50"},
+            {"NSE:NIFTY BANK", "BANK NIFTY"},
+            {"BSE:SENSEX", "SENSEX"},
+        };
+        for (String[] d : defs) {
+            String symbol = d[0];
+            if ("DEMO".equals(safeProvider)) {
+                List<Candle> h = brokerCandleService.generateDemo(symbol, "1d", 3);
+                if (h != null && !h.isEmpty()) {
+                    Candle last = h.getLast();
+                    double prev = h.size() > 1 ? h.get(h.size() - 2).close() : last.open();
+                    quotes.add(new IndexQuote(symbol, d[1], last.close(), prev > 0 ? (last.close() - prev) / prev * 100 : 0, "DEMO"));
+                } else {
+                    quotes.add(new IndexQuote(symbol, d[1], null, null, "UNAVAILABLE"));
+                }
+                continue;
+            }
+            if (!brokerCandleService.isConnected(safeProvider, session)) {
+                quotes.add(new IndexQuote(symbol, d[1], null, null, "NOT_CONNECTED"));
+                continue;
+            }
+            Candle live = brokerCandleService.fetchLiveQuote(safeProvider, symbol, "1d", 2, session);
+            if (live == null) {
+                List<Candle> history = brokerCandleService.fetchCandles(safeProvider, symbol, "1d", 2, session);
+                if (history != null && !history.isEmpty()) {
+                    Candle last = history.getLast();
+                    double prev = history.size() > 1 ? history.get(history.size() - 2).close() : last.open();
+                    quotes.add(new IndexQuote(symbol, d[1], last.close(), prev > 0 ? (last.close() - prev) / prev * 100 : 0, "HISTORY"));
+                } else {
+                    quotes.add(new IndexQuote(symbol, d[1], null, null, "UNAVAILABLE"));
+                }
+                continue;
+            }
+            double prev = live.open();
+            List<Candle> history = brokerCandleService.fetchCandles(safeProvider, symbol, "1d", 2, session);
+            if (history != null && history.size() > 1) prev = history.get(history.size() - 2).close();
+            double cur = live.close();
+            quotes.add(new IndexQuote(symbol, d[1], cur, prev > 0 ? (cur - prev) / prev * 100 : 0, "LIVE"));
+        }
+        return ResponseEntity.ok(java.util.Map.of("provider", safeProvider, "indices", quotes));
+    }
+
+    public record IndexQuote(String symbol, String label, Double value, Double changePct, String source) {}
+
     public record Provider(String id, String name, String status) {}
     public record SymbolInfo(String value, String label) {}
     public record SymbolGroup(String category, List<SymbolInfo> symbols) {}

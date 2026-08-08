@@ -7,6 +7,7 @@ com\trading\chartstudio\ChartController$Provider.class
 com\trading\chartstudio\AccountController$SaveProfile.class
 com\trading\chartstudio\UserStore$Profile.class
 com\trading\chartstudio\ChartController.class
+com\trading\chartstudio\ChartController$IndexQuote.class
 com\trading\chartstudio\AngelOneAuthController$Login.class
 com\trading\chartstudio\CustomStrategyController.class
 com\trading\chartstudio\UserStore$1.class

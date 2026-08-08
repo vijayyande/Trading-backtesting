@@ -74,10 +74,14 @@ public class BrokerCandleService {
         java.util.Map.entry("NIFTY CONSUMPTION", "99926021"),
         java.util.Map.entry("NIFTY COMMODITIES", "99926022"),
         java.util.Map.entry("NIFTY OIL & GAS", "99926023"),
-        java.util.Map.entry("NIFTY INDIA DIGITAL", "99926024"));
+        java.util.Map.entry("NIFTY INDIA DIGITAL", "99926024"),
+        java.util.Map.entry("SENSEX", "99919000"),
+        java.util.Map.entry("BANKEX", "99919012"));
 
     private static final java.util.Map<String, Double> DEMO_BASE_PRICE = java.util.Map.ofEntries(
         java.util.Map.entry("NSE:NIFTY 50", 25000.0),
+        java.util.Map.entry("BSE:SENSEX", 77000.0),
+        java.util.Map.entry("BSE:BANKEX", 58000.0),
         java.util.Map.entry("NSE:NIFTY BANK", 54500.0),
         java.util.Map.entry("NSE:NIFTY IT", 41500.0),
         java.util.Map.entry("NSE:NIFTY NEXT 50", 72000.0),
@@ -763,7 +767,7 @@ public class BrokerCandleService {
             String cacheKey = "angeltoken:" + exchange + ":" + tradingSymbol;
             String cached = angelTokenCache.get(cacheKey);
             if (cached != null) return cached;
-            if ("NSE".equals(exchange)) {
+            if ("NSE".equals(exchange) || "BSE".equals(exchange)) {
                 String idx = ANGEL_INDEX_TOKENS.get(tradingSymbol.toUpperCase(Locale.ROOT));
                 if (idx != null) {
                     angelTokenCache.put(cacheKey, idx);
