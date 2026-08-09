@@ -157,7 +157,7 @@ hr{border:0;border-top:1px solid var(--line);margin:23px 0}
 
 /* Custom strategy */
 .custom-rule-heading{display:flex;justify-content:space-between;align-items:center;margin-top:11px;color:var(--muted);font:9px 'DM Mono';letter-spacing:.4px}.custom-rule-heading span{display:flex;align-items:center;gap:5px}.custom-rule-heading select{width:auto;padding:2px 4px;font:9px 'DM Mono'}.custom-rule-heading button,#newCustomStrategy{border:0;background:none;color:var(--cyan);font:10px 'DM Mono';cursor:pointer}
-.custom-condition{display:grid;grid-template-columns:1fr auto auto auto 1fr auto auto auto .18fr;gap:4px;margin-top:5px;align-items:center}.custom-condition select,.custom-condition input{min-width:0;padding:6px 4px;font:9px 'DM Mono'}.custom-condition button{border:0;background:none;color:var(--muted);cursor:pointer}.cc-signal{width:78px}.cc-operator{width:96px}.cc-connector{width:52px}.cc-number{width:70px}.cc-params{display:flex;gap:4px;flex-wrap:wrap}.cc-params input{width:44px}.cc-math{grid-column:span 3;display:flex;gap:4px;flex-wrap:wrap;align-items:center;min-width:0}.cc-mathop{width:42px}
+.custom-condition{display:grid;grid-template-columns:1fr auto auto auto 1fr auto auto auto .18fr;gap:4px;margin-top:5px;align-items:center}.custom-condition select,.custom-condition input{min-width:0;padding:6px 4px;font:9px 'DM Mono'}.custom-condition button{border:0;background:none;color:var(--muted);cursor:pointer}.cc-signal{width:78px}.cc-operator{width:96px}.cc-connector{width:52px}.cc-number{width:70px}.cc-params{display:flex;gap:4px;flex-wrap:wrap}.cc-params input{width:44px}.cc-candle{width:46px;border-color:var(--cyan)}.cc-math{grid-column:span 3;display:flex;gap:4px;flex-wrap:wrap;align-items:center;min-width:0}.cc-mathop{width:42px}
 .target-settings{display:flex;gap:7px;margin-top:10px}.target-settings label{flex:1;color:var(--muted);font:9px 'DM Mono'}.target-settings select,.target-settings input{margin-top:4px;padding:6px 5px;font:10px 'DM Mono'}
 
 /* Dialog + toast */
@@ -179,7 +179,8 @@ dialog{border:0;border-radius:8px;background:var(--panel);color:var(--text);padd
 .account-switch{display:flex;justify-content:center;gap:6px;align-items:center;padding:14px 0 16px;color:var(--muted);font-size:11px}
 .account-switch button{border:0;background:none;color:var(--cyan);cursor:pointer;font-size:11px}
 .dialog-footer{display:flex;gap:8px;padding:0 20px 18px}.dialog-footer .connect{flex:1;width:auto}
-.danger-ghost{border:1px solid var(--line-soft);border-radius:4px;background:none;color:var(--red);padding:9px 12px;font:600 11px Manrope;cursor:pointer}
+.danger-ghost{border:1px solid var(--line-soft);border-radius:4px;background:none;color:var(--red);padding:9px 12px;font:600 11px Manrope;cursor:pointer}.danger-ghost:disabled{opacity:.45;cursor:not-allowed}
+.saved-strategy-row{display:flex;gap:6px;align-items:center}.saved-strategy-row select{flex:1 1 auto}.saved-strategy-row .danger-ghost{flex:0 0 auto;padding:8px 10px}
 .vault-user{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line);font-size:12px;color:var(--text-soft)}
 .vault-user b{color:var(--text)}
 .vault-list{max-height:340px;overflow:auto;padding:14px 20px 8px}

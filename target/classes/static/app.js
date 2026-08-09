@@ -12,6 +12,7 @@ let drawings = [], drawMode = 'select', drawColor = '#47d7d1', selectedDrawing =
 const intervalSeconds = () => ({ '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 }[interval] || 86400);
 const defaultLimit = () => ({ '1m': 9000, '5m': 2000, '15m': 700, '1h': 200, '1d': 30 }[interval] || 30);
 const ONE_MONTH_MS = 30 * 24 * 3600 * 1000;
+const MIN_TRADE_QTY = 100;
 const INDICATOR_PARAMS = {
   BB: [['period', 'Period', 20], ['std', 'Std dev', 2]], KC: [['period', 'EMA', 20], ['mult', 'ATR mult', 2]], DC: [['period', 'Period', 20]], ENVELOPE: [['period', 'Period', 20], ['percent', 'Width %', 2.5]],
   SAR: [['accel', 'Acceleration', .02], ['maxAccel', 'Maximum', .2]], SUPERTREND: [['atrPeriod', 'ATR period', 10], ['mult', 'Multiplier', 3]], ICHIMOKU: [['conversion', 'Conversion', 9], ['base', 'Base', 26], ['spanB', 'Span B', 52]],
@@ -966,7 +967,8 @@ function seriesControls(side, path, allowNumber, operator, allowMath = false) {
     const value = side.params && side.params[key] != null ? side.params[key] : def;
     return `<input data-side="${path}" data-param="${key}" type="number" step="${isDecimalParam(key) ? 'any' : '1'}" value="${value}" title="${label}" placeholder="${label}">`;
   }).join('');
-  return indicator + signal + `<span class="cc-params">${params}</span>`;
+  const candle = ['OPEN', 'HIGH', 'LOW', 'CLOSE'].includes(side.indicator) ? `<input data-field="${path}.offset" type="number" step="1" class="cc-candle" value="${side.offset ?? 0}" title="Candle to use in the comparison: 0 = most recent candle, -1 = previous candle, -2 = two candles ago" placeholder="0">` : '';
+  return indicator + signal + `<span class="cc-params">${params}${candle}</span>`;
 }
 function sideControls(side, dataField, operator) {
   if (side.indicator === 'MATH') {
@@ -1038,7 +1040,7 @@ function addCustomCondition(kind) {
 }
 function resetCustomStrategy() {
   customDraft = { entryConditions: [{ left: { indicator: 'RSI', params: { period: 14 }, signal: null, offset: 0 }, operator: 'below', right: { indicator: 'NUMBER', params: {}, signal: null, offset: 0, number: 30, number2: '' }, connector: 'AND' }], exitConditions: [{ left: { indicator: 'RSI', params: { period: 14 }, signal: null, offset: 0 }, operator: 'above', right: { indicator: 'NUMBER', params: {}, signal: null, offset: 0, number: 70, number2: '' }, connector: 'AND' }], profitTargetType: 'PERCENT', profitTarget: 0, stopLossType: 'PERCENT', stopLoss: 0 };
-  $('#customStrategyName').value = ''; $('#savedCustomStrategies').value = ''; renderCustomConditions();
+  $('#customStrategyName').value = ''; $('#savedCustomStrategies').value = ''; $('#deleteCustomStrategy').disabled = true; renderCustomConditions();
 }
 async function loadCustomStrategies() {
   const response = await fetch('/api/custom-strategies');
@@ -1048,6 +1050,7 @@ async function loadCustomStrategies() {
   const saved = $('#savedCustomStrategies'), chosen = saved.value;
   saved.innerHTML = '<option value="">Select a saved strategy…</option>' + records.map(record => `<option value="${record.id}">${escapeHtml(record.name)}</option>`).join('');
   if (customStrategies.has(chosen)) saved.value = chosen;
+  $('#deleteCustomStrategy').disabled = !$('#savedCustomStrategies').value;
   const strategy = $('#strategy'), strategyValue = strategy.value;
   [...strategy.querySelectorAll('option[data-custom]')].forEach(option => option.remove());
   records.forEach(record => strategy.insertAdjacentHTML('beforeend', `<option data-custom value="CUSTOM:${record.id}">Custom: ${escapeHtml(record.name)}</option>`));
@@ -1063,6 +1066,7 @@ function useCustomStrategy(id) {
   customDraft.exitConditions.forEach(condition => { normalizeCondition(condition); });
   finalizeLogic(customDraft.entryConditions, customDraft.entryLogic); finalizeLogic(customDraft.exitConditions, customDraft.exitLogic);
   $('#customStrategyName').value = strategy.name; $('#savedCustomStrategies').value = id; renderCustomConditions();
+  $('#deleteCustomStrategy').disabled = false;
   $('#strategy').value = `CUSTOM:${id}`; $('#strategy').dispatchEvent(new Event('change'));
 }
 function syncCustomDraft() {
@@ -1092,6 +1096,21 @@ async function saveCustomStrategy() {
   const saved = [...customStrategies.entries()].find(([, strategy]) => strategy.name === name);
   if (saved) useCustomStrategy(saved[0]);
   toast('Custom strategy saved.');
+}
+async function deleteCustomStrategy() {
+  const id = $('#savedCustomStrategies').value;
+  if (!id) return;
+  if (!confirm('Delete the selected saved strategy?')) return;
+  try {
+    const response = await fetch('/api/custom-strategies/' + id, { method: 'DELETE' });
+    if (!response.ok) throw Error();
+  } catch { toast('Could not delete the strategy.'); return; }
+  const wasActive = $('#strategy').value === `CUSTOM:${id}`;
+  $('#savedCustomStrategies').value = '';
+  $('#deleteCustomStrategy').disabled = true;
+  await loadCustomStrategies();
+  if (wasActive) { $('#strategy').value = ''; $('#strategy').dispatchEvent(new Event('change')); renderStrategy(); }
+  toast('Strategy deleted.');
 }
 function initDrawingBarToggle() {
   const btn = $('#toggleDrawingBar');
@@ -1246,7 +1265,11 @@ async function setup() {
   $('#addExitCondition').onclick = () => addCustomCondition('exitConditions');
   $('#newCustomStrategy').onclick = resetCustomStrategy;
   $('#saveCustomStrategy').onclick = saveCustomStrategy;
-  $('#savedCustomStrategies').onchange = () => { if ($('#savedCustomStrategies').value) useCustomStrategy($('#savedCustomStrategies').value); };
+  $('#savedCustomStrategies').onchange = () => {
+    $('#deleteCustomStrategy').disabled = !$('#savedCustomStrategies').value;
+    if ($('#savedCustomStrategies').value) useCustomStrategy($('#savedCustomStrategies').value);
+  };
+  $('#deleteCustomStrategy').onclick = deleteCustomStrategy;
   resetCustomStrategy();
   try { await loadCustomStrategies(); } catch { toast('Saved custom strategies are unavailable.'); }
   $('#runBacktest').onclick = runBacktest;
@@ -1472,7 +1495,7 @@ function strategyParams() {
 }
 function money(value) { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(value); }
 function dateTime(time) { return new Date(time).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); }
-function executeBacktestShared(symbolsData, strategy, params, quantity, capital) {
+function executeBacktestShared(symbolsData, strategy, params, quantity, capital, maxTradesPerDay = 0) {
   const plans = symbolsData.map(({ symbol, data }) => {
     const signals = computeStrategy(strategy, { ...params, quantity }, data);
     const plan = [];
@@ -1493,13 +1516,19 @@ function executeBacktestShared(symbolsData, strategy, params, quantity, capital)
     return { symbol, data, plan };
   });
   const events = plans.flatMap(plan => plan.plan).sort((a, b) => a.time - b.time);
-  const opens = new Map(), realizedEvents = [];
+  const opens = new Map(), realizedEvents = [], dailyTrades = new Map();
   let cash = capital;
   const orders = [];
   events.forEach(event => {
     if (event.type === 'BUY') {
       const qty = Math.min(event.qty, Math.floor(cash / event.price));
-      if (qty < 1) return;
+      if (qty < MIN_TRADE_QTY) return;
+      if (maxTradesPerDay) {
+        const day = Math.floor(event.time / 86400000), key = event.symbol + '|' + day;
+        const count = dailyTrades.get(key) || 0;
+        if (count >= maxTradesPerDay) return;
+        dailyTrades.set(key, count + 1);
+      }
       const amount = qty * event.price;
       cash -= amount;
       opens.set(event.symbol, { qty, price: event.price, amount });
@@ -1627,7 +1656,7 @@ async function runBacktest() {
       return { symbol, data: (data.candles || []).filter(candle => candle.time >= from * 1000 && candle.time <= to * 1000) };
     }));
     backtestCapital = capital;
-    backtestRuns = executeBacktestShared(symbolsData, strategy, strategyParams(), quantity, capital);
+    backtestRuns = executeBacktestShared(symbolsData, strategy, strategyParams(), quantity, capital, Math.max(0, Math.trunc(Number($('#backtestMaxTrades').value) || 0)));
     const stockSelect = $('#backtestStockSelect');
     stockSelect.hidden = backtestRuns.length < 2;
     stockSelect.innerHTML = backtestRuns.map(run => `<option value="${escapeHtml(run.symbol)}">${escapeHtml(run.symbol)}</option>`).join('');
