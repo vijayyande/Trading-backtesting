@@ -1152,10 +1152,8 @@ async function setup() {
     `<optgroup label="${g.category}">${g.symbols.map(s => `<option value="${s.value}">${s.label}</option>`).join('')}</optgroup>`
   ).join('');
   $('#symbol').value = 'NSE:NIFTY 50';
-  $('#backtestSymbols').innerHTML = groups.map(g =>
-    `<optgroup label="${g.category}">${g.symbols.map(s => `<option value="${s.value}">${s.label}</option>`).join('')}</optgroup>`
-  ).join('');
-  $('#backtestSymbols').value = 'NSE:NIFTY 50';
+  renderSymbolCheckboxList(groups);
+  setSelectedSymbols(['NSE:NIFTY 50']);
   const today = new Date(), yearAgo = new Date(today); yearAgo.setMonth(today.getMonth() - 1);
   $('#backtestStart').value = yearAgo.toISOString().slice(0, 10);
   $('#backtestEnd').value = today.toISOString().slice(0, 10);
@@ -1200,7 +1198,7 @@ async function setup() {
     }
     load();
   });
-  $('#refreshSymbols').onclick = async () => { const groups = await (await fetch('/api/symbols')).json(); const val = $('#symbol').value, selected = [...$('#backtestSymbols').selectedOptions].map(o => o.value); const options = groups.map(g => `<optgroup label="${g.category}">${g.symbols.map(s => `<option value="${s.value}">${s.label}</option>`).join('')}</optgroup>`).join(''); $('#symbol').innerHTML = options; $('#backtestSymbols').innerHTML = options; $('#symbol').value = val; [...$('#backtestSymbols').options].forEach(o => o.selected = selected.includes(o.value)); };
+  $('#refreshSymbols').onclick = async () => { const groups = await (await fetch('/api/symbols')).json(); const val = $('#symbol').value, selected = selectedSymbols(); const options = groups.map(g => `<optgroup label="${g.category}">${g.symbols.map(s => `<option value="${s.value}">${s.label}</option>`).join('')}</optgroup>`).join(''); $('#symbol').innerHTML = options; renderSymbolCheckboxList(groups); setSelectedSymbols(selected); $('#symbol').value = val; };
   $('#timeframes').onclick = e => {
     if (!e.target.dataset.i) return;
     interval = e.target.dataset.i;
@@ -1633,10 +1631,21 @@ function clearBacktest() {
   updatePnlBadge();
   if (mainSeries) { render(); renderStrategy(); }
 }
+function renderSymbolCheckboxList(groups) {
+  $('#backtestSymbols').innerHTML = groups.map(group =>
+    `<div class="symbol-checkbox-group">${escapeHtml(group.category)}</div>` +
+    group.symbols.map(symbol => `<label class="symbol-checkbox-row"><input type="checkbox" value="${escapeHtml(symbol.value)}"><span>${escapeHtml(symbol.label)}</span></label>`).join('')
+  ).join('');
+}
+function selectedSymbols() { return [...document.querySelectorAll('#backtestSymbols input[type=checkbox]:checked')].map(input => input.value); }
+function setSelectedSymbols(values) {
+  const set = new Set(values);
+  document.querySelectorAll('#backtestSymbols input[type=checkbox]').forEach(input => { input.checked = set.has(input.value); });
+}
 async function runBacktest() {
   const strategy = $('#strategy').value;
   const start = $('#backtestStart').value, end = $('#backtestEnd').value;
-  const symbols = [...$('#backtestSymbols').selectedOptions].map(option => option.value);
+  const symbols = selectedSymbols();
   const quantity = Math.floor(Number($('#backtestQuantity').value));
   const capital = Number($('#backtestCapital').value);
   if (!strategy) return toast('Select and apply a strategy before running a backtest.');

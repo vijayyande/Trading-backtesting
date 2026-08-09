@@ -136,6 +136,11 @@ hr{border:0;border-top:1px solid var(--line);margin:23px 0}
 .strategy-section>.connect{width:auto;min-width:150px}
 .strategy-section>.backtest-dates,.strategy-section>.backtest-values{flex:1 1 270px}
 .strategy-section>#backtestSymbols{flex:1 1 300px}
+.symbol-checkbox-list{border:1px solid var(--line-soft-2);border-radius:4px;background:var(--chip-bg);overflow-y:auto;max-height:340px;padding:6px 8px}
+.symbol-checkbox-list .symbol-checkbox-group{font:9px 'DM Mono';letter-spacing:1px;color:var(--text-label);padding:7px 2px 4px}
+.symbol-checkbox-list .symbol-checkbox-row{display:flex;align-items:center;gap:7px;padding:4px 2px;cursor:pointer;color:var(--text);font-size:12px}
+.symbol-checkbox-list .symbol-checkbox-row:hover{color:var(--cyan)}
+.symbol-checkbox-list input[type=checkbox]{accent-color:var(--cyan);cursor:pointer}
 .strategy-section>.backtest-help{flex-basis:100%}
 .strategy-section:nth-of-type(2){display:block}.strategy-section:nth-of-type(2)>.label{margin-bottom:10px}
 .strategy-params{display:flex;gap:5px;margin-top:6px}.strategy-params label{flex:1;color:var(--muted);font:9px 'DM Mono'}.strategy-params input{width:100%;padding:6px 4px;text-align:center;font:10px 'DM Mono'}
