@@ -4,6 +4,7 @@ const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({ '&': '&
 const COLORS = ['#47d7d1', '#f1bd56', '#b88cff', '#f27675', '#75b9ff', '#9bdc71'];
 let chart, mainSeries, candles = [], interval = '5m', chartType = 'candlestick', active = [], liveTimer, loadingMore = false, noMoreHistory = false, backtestRuns = [], backtestCapital = 0, inBacktestMode = false, customStrategies = new Map(), customDraft = { entryConditions: [], exitConditions: [], stopLoss: 0 };
 let account = { loggedIn: false, username: '', profiles: [] }, accountMode = 'login';
+let pnlBadgeVisible = (() => { try { return localStorage.getItem('prism.showPnlBadge') !== '0'; } catch { return true; } })();
 let indicatorPane = 0;
 let indicatorPresets = {};
 let mainMarkers = null;
@@ -43,6 +44,14 @@ const CONDITION_PARAMS = {
   KC: [['period', 'Period', 20], ['mult', 'Multiplier', 2]],
   ENVELOPE: [['period', 'Period', 20], ['percent', 'Width %', 2.5]],
   STDDEV: [['period', 'Period', 20]], HV: [['period', 'Period', 20]],
+  VWMA: [['period', 'Period', 14]], ALMA: [['period', 'Period', 9], ['offset', 'Offset', .85], ['sigma', 'Sigma', 6]], ZLEMA: [['period', 'Period', 14]],
+  LR: [['period', 'Period', 14]], LSR: [['period', 'Period', 14]],
+  CMO: [['period', 'Period', 14]], UO: [['short', 'Short', 7], ['mid', 'Mid', 14], ['long', 'Long', 28]],
+  KST: [['roc1', 'ROC 1', 10], ['roc2', 'ROC 2', 15], ['roc3', 'ROC 3', 20], ['roc4', 'ROC 4', 30], ['sma1', 'SMA 1', 10], ['sma2', 'SMA 2', 10], ['sma3', 'SMA 3', 10], ['sma4', 'SMA 4', 15], ['signal', 'Signal', 9]],
+  RVI: [['period', 'Period', 10], ['signal', 'Signal', 4]],
+  NATR: [['period', 'Period', 14]], BOP: [], PVT: [],
+  CHOP: [['period', 'Period', 14]],
+  PRC: [['period', 'Period', 20]], ELDER: [['period', 'Period', 13]],
   MATH: [],
 };
 const CONDITION_SIGNALS = {
@@ -58,11 +67,15 @@ const CONDITION_SIGNALS = {
   ICHIMOKU: [['conversion', 'Conversion'], ['base', 'Base'], ['spanA', 'Span A'], ['spanB', 'Span B']],
   PPO: [['line', 'PPO line'], ['signal', 'Signal']],
   VORTEX: [['diff', 'VI+ − VI−'], ['vplus', 'VI+'], ['vminus', 'VI−']],
+  KST: [['kst', 'KST'], ['signal', 'Signal']],
+  RVI: [['rvi', 'RVI'], ['signal', 'Signal']],
+  PRC: [['high', 'High'], ['low', 'Low']],
+  ELDER: [['bull', 'Bull Power'], ['bear', 'Bear Power']],
 };
-const CONDITION_INDICATORS = [['CLOSE', 'Close'], ['OPEN', 'Open'], ['HIGH', 'High'], ['LOW', 'Low'], ['VOLUME', 'Volume'], ['TYPICAL', 'Typical price'], ['SMA', 'SMA'], ['EMA', 'EMA'], ['WMA', 'WMA'], ['DEMA', 'Double EMA'], ['TEMA', 'Triple EMA'], ['HMA', 'Hull MA'], ['KAMA', 'Kaufman MA'], ['SAR', 'Parabolic SAR'], ['SUPERTREND', 'Supertrend'], ['ICHIMOKU', 'Ichimoku Cloud'], ['RSI', 'RSI'], ['MACD', 'MACD'], ['PPO', 'PPO'], ['STOCH', 'Stochastic'], ['STOCHRSI', 'Stoch RSI'], ['MFI', 'MFI'], ['CCI', 'CCI'], ['WILLIAMS_R', 'Williams %R'], ['ROC', 'Rate of Change'], ['MOM', 'Momentum'], ['AO', 'Awesome Oscillator'], ['TRIX', 'TRIX'], ['DPO', 'Detrended Price Oscillator'], ['ATR', 'Average True Range'], ['ADX', 'ADX'], ['AROON', 'Aroon'], ['VWAP', 'VWAP'], ['OBV', 'On-Balance Volume'], ['ADL', 'Accumulation/Distribution'], ['ADOSC', 'Chaikin Oscillator'], ['CMF', 'Chaikin Money Flow'], ['FI', 'Force Index'], ['VORTEX', 'Vortex Indicator'], ['BB', 'Bollinger Bands'], ['DC', 'Donchian Channel'], ['KC', 'Keltner Channel'], ['ENVELOPE', 'Moving Average Envelope'], ['STDDEV', 'Standard Deviation'], ['HV', 'Historical Volatility'], ['MATH', 'Math expression']];
+const CONDITION_INDICATORS = [['CLOSE', 'Close'], ['OPEN', 'Open'], ['HIGH', 'High'], ['LOW', 'Low'], ['VOLUME', 'Volume'], ['TYPICAL', 'Typical price'], ['SMA', 'SMA'], ['EMA', 'EMA'], ['WMA', 'WMA'], ['VWMA', 'Volume Weighted MA'], ['ALMA', 'Arnaud Legoux MA'], ['ZLEMA', 'Zero-Lag EMA'], ['DEMA', 'Double EMA'], ['TEMA', 'Triple EMA'], ['HMA', 'Hull MA'], ['KAMA', 'Kaufman MA'], ['SAR', 'Parabolic SAR'], ['SUPERTREND', 'Supertrend'], ['ICHIMOKU', 'Ichimoku Cloud'], ['RSI', 'RSI'], ['MACD', 'MACD'], ['PPO', 'PPO'], ['STOCH', 'Stochastic'], ['STOCHRSI', 'Stoch RSI'], ['MFI', 'MFI'], ['CCI', 'CCI'], ['WILLIAMS_R', 'Williams %R'], ['ROC', 'Rate of Change'], ['MOM', 'Momentum'], ['CMO', 'Chande Momentum'], ['UO', 'Ultimate Oscillator'], ['KST', 'KST'], ['RVI', 'Relative Vigor'], ['LR', 'Lin. Regression'], ['LSR', 'Lin. Reg. Slope'], ['AO', 'Awesome Oscillator'], ['TRIX', 'TRIX'], ['DPO', 'Detrended Price Oscillator'], ['ATR', 'Average True Range'], ['NATR', 'Normalized ATR'], ['CHOP', 'Choppiness'], ['ADX', 'ADX'], ['AROON', 'Aroon'], ['VWAP', 'VWAP'], ['OBV', 'On-Balance Volume'], ['ADL', 'Accumulation/Distribution'], ['ADOSC', 'Chaikin Oscillator'], ['CMF', 'Chaikin Money Flow'], ['FI', 'Force Index'], ['BOP', 'Balance of Power'], ['PVT', 'Price Volume Trend'], ['VORTEX', 'Vortex Indicator'], ['BB', 'Bollinger Bands'], ['DC', 'Donchian Channel'], ['PRC', 'Price Channel'], ['ELDER', 'Elder-Ray'], ['KC', 'Keltner Channel'], ['ENVELOPE', 'Moving Average Envelope'], ['STDDEV', 'Standard Deviation'], ['HV', 'Historical Volatility'], ['MATH', 'Math expression']];
 const conditionParams = name => CONDITION_PARAMS[name] || [['period', 'Period', 14]];
 const conditionParamsObj = name => Object.fromEntries(conditionParams(name).map(([key, , value]) => [key, value]));
-const isDecimalParam = key => ['accel', 'maxAccel', 'std', 'mult', 'percent'].includes(key);
+const isDecimalParam = key => ['accel', 'maxAccel', 'std', 'mult', 'percent', 'offset', 'sigma'].includes(key);
 const conditionSignals = name => CONDITION_SIGNALS[name] || null;
 const defaultSignal = name => CONDITION_SIGNALS[name]?.[0][0] || null;
 const LEGACY_INDICATOR_MAP = {
@@ -711,7 +724,9 @@ function render(fit = true) {
   if (!candles.length) return;
   const data = chartType === 'line' ? candles.map(x => ({ time: x.time / 1000, value: x.close }))
     : candles.map(x => ({ time: x.time / 1000, open: x.open, high: x.high, low: x.low, close: x.close }));
-  mainSeries.setData(data); removeIndicators(); indicatorPane = 0; active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); layoutPanes(); if (fit) chart.timeScale().fitContent();
+  mainSeries.setData(data); removeIndicators(); indicatorPane = 0; active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); layoutPanes();
+  if (inBacktestMode && backtestRuns.length) { const run = backtestRuns.find(item => item.symbol === $('#backtestStockSelect').value) || backtestRuns[0]; if (run) backtestMarkers(run); }
+  if (fit) chart.timeScale().fitContent();
 }
 function sma(values, period) { return values.map((_, i) => i < period - 1 ? null : values.slice(i - period + 1, i + 1).reduce((sum, n) => sum + n, 0) / period); }
 function ema(values, period) { const factor = 2 / (period + 1); let value; return values.map((n, i) => { value = i ? value + factor * (n - value) : n; return i < period - 1 ? null : value; }); }
@@ -807,7 +822,7 @@ async function load() {
   $('#backtestStockSelect').hidden = true;
   cancelDraft();
   clearInterval(liveTimer);
-  $('#backtestPnlBadge').hidden = true;
+  updatePnlBadge();
   if (loadRetryTimer) { clearTimeout(loadRetryTimer); loadRetryTimer = null; }
   $('#updated').textContent = 'Fetching candles...';
   try {
@@ -918,7 +933,7 @@ async function refreshIndices() {
   } catch {}
 }
 async function loadMore() {
-  if (loadingMore || noMoreHistory || !candles.length) return;
+  if (loadingMore || noMoreHistory || inBacktestMode || !candles.length) return;
   loadingMore = true;
   try {
     const provider = $('#provider').value || 'DEMO';
@@ -1174,6 +1189,17 @@ async function setup() {
     if (inBacktestMode && backtestRuns.length) inBacktestMode = false;
     load();
   };
+  const pnlToggle = $('#pnlToggle');
+  pnlToggle.checked = pnlBadgeVisible;
+  pnlToggle.onchange = () => {
+    pnlBadgeVisible = pnlToggle.checked;
+    try { localStorage.setItem('prism.showPnlBadge', pnlBadgeVisible ? '1' : '0'); } catch {}
+    updatePnlBadge();
+    if (inBacktestMode && backtestRuns.length) {
+      const run = backtestRuns.find(item => item.symbol === $('#backtestStockSelect').value) || backtestRuns[0];
+      if (run) backtestMarkers(run);
+    }
+  };
   $$('.chart-type').forEach(button => button.onclick = () => {
     $$('.chart-type').forEach(x => x.classList.remove('active'));
     button.classList.add('active');
@@ -1361,6 +1387,21 @@ function customSeries(condition, data) {
   if (condition.indicator === 'ENVELOPE') { const mid = sma(close, period), pct = setting('percent', 2.5), sig = condition.signal || 'mid'; return mid.map((v, i) => v == null ? null : sig === 'upper' ? v * (1 + pct / 100) : sig === 'lower' ? v * (1 - pct / 100) : v); }
   if (condition.indicator === 'STDDEV') return sma(close, period).map((m, i) => m == null ? null : Math.sqrt(close.slice(i - period + 1, i + 1).reduce((sum, value) => sum + (value - m) ** 2, 0) / period));
   if (condition.indicator === 'HV') return close.map((_, i) => i < period ? null : Math.sqrt(close.slice(i - period + 1, i + 1).reduce((s, v, j, a) => j ? s + Math.log(v / a[j - 1]) ** 2 : s, 0) / period) * Math.sqrt(252) * 100);
+  if (condition.indicator === 'VWMA') { const vol = data.map(c => c.volume || 1); return close.map((_, i) => i < period - 1 ? null : close.slice(i - period + 1, i + 1).reduce((s, p, j) => s + p * vol[i - period + 1 + j], 0) / vol.slice(i - period + 1, i + 1).reduce((s, x) => s + x, 0)); }
+  if (condition.indicator === 'ALMA') { const offset = setting('offset', .85), sigma = setting('sigma', 6), m = Math.floor(offset * (period - 1)), sd = period / sigma, weights = Array.from({ length: period }, (_, j) => Math.exp(-.5 * ((j - m) / sd) ** 2)), wSum = weights.reduce((s, x) => s + x, 0); return close.map((_, i) => i < period - 1 ? null : weights.reduce((s, x, j) => s + x * close[i - period + 1 + j], 0) / wSum); }
+  if (condition.indicator === 'ZLEMA') { const lag = Math.floor((period - 1) / 2); return ema(close.map((v, i) => i < lag ? v : 2 * v - close[i - lag]), period); }
+  if (condition.indicator === 'LR') { const n = period, sx = n * (n - 1) / 2, sx2 = n * (n - 1) * (2 * n - 1) / 6; return close.map((_, i) => { if (i < n - 1) return null; let sy = 0, sxy = 0; for (let j = 0; j < n; j++) { sy += close[i - n + 1 + j]; sxy += j * close[i - n + 1 + j]; } const slope = (n * sxy - sx * sy) / (n * sx2 - sx * sx), intercept = (sy - slope * sx) / n; return intercept + slope * (n - 1); }); }
+  if (condition.indicator === 'LSR') { const n = period, sx = n * (n - 1) / 2, sx2 = n * (n - 1) * (2 * n - 1) / 6; return close.map((_, i) => { if (i < n - 1) return null; let sy = 0, sxy = 0; for (let j = 0; j < n; j++) { sy += close[i - n + 1 + j]; sxy += j * close[i - n + 1 + j]; } return (n * sxy - sx * sy) / (n * sx2 - sx * sx); }); }
+  if (condition.indicator === 'CMO') return close.map((_, i) => { if (i < period) return null; let up = 0, down = 0; for (let j = i - period + 1; j <= i; j++) { const diff = close[j] - close[j - 1]; if (diff >= 0) up += diff; else down -= diff; } return up + down === 0 ? 0 : (up - down) / (up + down) * 100; });
+  if (condition.indicator === 'UO') { const tr = trueRange(data), bp = data.map((c, i) => c.close - Math.min(c.low, i ? data[i - 1].close : c.low)), ratio = (n, i) => { let bs = 0, ts = 0; for (let j = 0; j < n; j++) { if (bp[i - j] == null || tr[i - j] == null) return null; bs += bp[i - j]; ts += tr[i - j]; } return ts === 0 ? null : bs / ts; }, s1 = Math.max(1, setting('short', 7)), s2 = Math.max(1, setting('mid', 14)), s3 = Math.max(1, setting('long', 28)); return data.map((_, i) => { if (i < s3 - 1) return null; const r1 = ratio(s1, i), r2 = ratio(s2, i), r3 = ratio(s3, i); return r1 == null || r2 == null || r3 == null ? null : 100 * (4 * r1 + 2 * r2 + r3) / 7; }); }
+  if (condition.indicator === 'KST') { const roc = n => close.map((v, i) => i < n || close[i - n] === 0 ? null : (v - close[i - n]) / close[i - n] * 100), r1 = ema(roc(Math.max(1, setting('roc1', 10))), Math.max(1, setting('sma1', 10))), r2 = ema(roc(Math.max(1, setting('roc2', 15))), Math.max(1, setting('sma2', 10))), r3 = ema(roc(Math.max(1, setting('roc3', 20))), Math.max(1, setting('sma3', 10))), r4 = ema(roc(Math.max(1, setting('roc4', 30))), Math.max(1, setting('sma4', 15))), kst = close.map((_, i) => r1[i] == null || r2[i] == null || r3[i] == null || r4[i] == null ? null : r1[i] + 2 * r2[i] + 3 * r3[i] + 4 * r4[i]), sig = ema(kst.map(x => x ?? 0), Math.max(1, setting('signal', 9))); return condition.signal === 'signal' ? sig : kst; }
+  if (condition.indicator === 'RVI') { const tp = data.map(c => (c.high + c.low + c.close) / 3), mid = tp.map((v, i) => i ? (v + tp[i - 1]) / 2 : v), num = sma(mid, period), den = sma(data.map(c => c.high - c.low), period), rvi = num.map((v, i) => v == null || den[i] == null || den[i] === 0 ? null : v / den[i] * 100), sig = ema(rvi.map(x => x ?? 0), Math.max(1, setting('signal', 4))); return condition.signal === 'signal' ? sig : rvi; }
+  if (condition.indicator === 'NATR') return sma(trueRange(data), period).map((v, i) => v == null || close[i] === 0 ? null : v / close[i] * 100);
+  if (condition.indicator === 'BOP') return data.map(c => c.high === c.low ? 0 : (c.close - c.open) / (c.high - c.low));
+  if (condition.indicator === 'PVT') { let pvt = 0; return close.map((v, i) => { if (i && close[i - 1]) pvt += (v - close[i - 1]) / close[i - 1] * data[i].volume; return pvt; }); }
+  if (condition.indicator === 'CHOP') { const tr = trueRange(data), atrSum = i => tr.slice(i - period + 1, i + 1).reduce((s, v) => s + v, 0); return data.map((_, i) => { if (i < period - 1) return null; const window = data.slice(i - period + 1, i + 1), high = Math.max(...window.map(c => c.high)), low = Math.min(...window.map(c => c.low)); return high === low ? 0 : 100 * Math.log10(atrSum(i) / (high - low)) / Math.log10(period); }); }
+  if (condition.indicator === 'PRC') { const sig = condition.signal || 'high'; return data.map((_, i) => i < period - 1 ? null : sig === 'low' ? Math.min(...data.slice(i - period + 1, i + 1).map(c => c.low)) : Math.max(...data.slice(i - period + 1, i + 1).map(c => c.high))); }
+  if (condition.indicator === 'ELDER') { const avg = ema(close, period), bull = data.map((c, i) => avg[i] == null ? null : c.high - avg[i]), bear = data.map((c, i) => avg[i] == null ? null : c.low - avg[i]); return condition.signal === 'bear' ? bear : bull; }
   if (condition.indicator === 'MATH') {
     const a = customSeries(condition.a?.indicator === 'MATH' ? { indicator: 'CLOSE', params: {}, signal: null } : condition.a, data);
     const b = condition.b?.indicator === 'NUMBER' ? Number(condition.b.number) : customSeries(condition.b?.indicator === 'MATH' ? { indicator: 'CLOSE', params: {}, signal: null } : condition.b, data);
@@ -1497,10 +1538,11 @@ function executeBacktestShared(symbolsData, strategy, params, quantity, capital)
   });
 }
 function backtestMarkers(run) {
+  const showPnl = pnlBadgeVisible;
   setMainMarkers(run.orders.map(order => ({
     time: order.time / 1000, position: order.type === 'BUY' ? 'belowBar' : 'aboveBar',
     color: order.type === 'BUY' ? '#55c99d' : '#e66e70', shape: order.type === 'BUY' ? 'arrowUp' : 'arrowDown',
-    text: order.type === 'BUY' ? 'BUY' : order.pnl == null ? (order.forced ? 'EXIT' : 'SELL') : `${order.forced ? 'EXIT ' : ''}${order.pnl >= 0 ? '+' : ''}${money(order.pnl)}`
+    text: order.type === 'BUY' ? 'BUY' : (!showPnl || order.pnl == null) ? (order.forced ? 'EXIT' : 'SELL') : `${order.forced ? 'EXIT ' : ''}${order.pnl >= 0 ? '+' : ''}${money(order.pnl)}`
   })));
 }
 function showBacktestChart(symbol) {
@@ -1517,11 +1559,15 @@ function showBacktestChart(symbol) {
   $('#intervalName').textContent = ` - backtest ${interval}`;
   updateQuote(); render(); backtestMarkers(run); chart.timeScale().fitContent();
   const badge = $('#backtestPnlBadge'), badgePnl = run.stockPnl ?? run.pnl, badgeBase = backtestCapital ? backtestCapital / backtestRuns.length : run.allocated, badgePct = badgeBase ? badgePnl / badgeBase * 100 : 0;
-  badge.hidden = false;
   badge.className = 'pnl-badge';
   badge.classList.add(badgePnl >= 0 ? 'pnl-positive' : 'pnl-negative');
   badge.innerHTML = `<span>BACKTEST P&L · ${escapeHtml(symbol)}</span><b>${badgePnl >= 0 ? '+' : ''}${money(badgePnl)}</b><span>${badgePnl >= 0 ? '+' : ''}${badgePct.toFixed(2)}%</span>`;
+  updatePnlBadge();
   $('#updated').textContent = `Backtest: ${symbol} · P&L ${badgePnl >= 0 ? '+' : ''}${money(badgePnl)} (${badgePct.toFixed(2)}%)`;
+}
+function updatePnlBadge() {
+  const badge = $('#backtestPnlBadge');
+  badge.hidden = !(inBacktestMode && pnlBadgeVisible && backtestRuns.length);
 }
 function renderBacktestResults() {
   const element = $('#backtestResults');
@@ -1554,8 +1600,8 @@ function exportBacktest() {
 function clearBacktest() {
   backtestRuns = [];
   $('#backtestResults').hidden = true;
-  $('#backtestPnlBadge').hidden = true;
   $('#backtestStockSelect').hidden = true;
+  updatePnlBadge();
   if (mainSeries) { render(); renderStrategy(); }
 }
 async function runBacktest() {
@@ -1592,12 +1638,12 @@ async function runBacktest() {
 function renderStrategy() {
   const name = $('#strategy').value;
   const summary = $('#strategySummary');
-  if (!name || !candles.length) { setMainMarkers([]); summary.innerHTML = ''; return; }
+  if (!name || !candles.length) { if (!inBacktestMode) setMainMarkers([]); summary.innerHTML = ''; return; }
   const keyed = {};
   $$('#strategyParams input').forEach(inp => { keyed[inp.dataset.k] = Number(inp.value) || Number(inp.placeholder); });
   const signals = computeStrategy(name, keyed, candles);
-  if (!signals.length) { setMainMarkers([]); summary.innerHTML = '<div>No signals generated.</div>'; return; }
-  setMainMarkers(signals.map(s => ({ time: s.time / 1000, position: s.type === 'buy' ? 'belowBar' : 'aboveBar', color: s.type === 'buy' ? '#55c99d' : '#e66e70', shape: s.type === 'buy' ? 'arrowUp' : 'arrowDown', text: s.type.toUpperCase() })));
+  if (!signals.length) { if (!inBacktestMode) setMainMarkers([]); summary.innerHTML = '<div>No signals generated.</div>'; return; }
+  if (!inBacktestMode) setMainMarkers(signals.map(s => ({ time: s.time / 1000, position: s.type === 'buy' ? 'belowBar' : 'aboveBar', color: s.type === 'buy' ? '#55c99d' : '#e66e70', shape: s.type === 'buy' ? 'arrowUp' : 'arrowDown', text: s.type.toUpperCase() })));
   let wins = 0, total = 0, pnl = 0;
   for (let i = 0; i < signals.length - 1; i += 2) {
     if (signals[i].type === 'buy' && signals[i + 1]?.type === 'sell') {

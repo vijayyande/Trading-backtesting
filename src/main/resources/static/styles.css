@@ -12,6 +12,7 @@
   --bar-highlight:#94a5ad;--faint:#566773;--faint-2:#61727e;
   --brand:#eef8f7;--profile-text:#071112;--shadow:#0008;
 }
+[hidden]{display:none!important}
 [data-theme="light"]{
   --bg:#f2f5f7;--panel:#ffffff;--panel-2:#eef1f4;--workspace-glow:#e4f2f0;
   --line:#d6dde3;--line-soft:#c3ccd4;--line-soft-2:#d2d9df;
@@ -105,6 +106,7 @@ hr{border:0;border-top:1px solid var(--line);margin:23px 0}
 .pattern-select:hover{border-color:var(--accent-line);color:var(--cyan)}
 .drawing-hint{font:9px 'DM Mono';color:var(--faint-2);line-height:1.4;text-align:center}
 .workspace-top-right{display:flex;align-items:center;gap:14px}
+.pnl-toggle{display:flex;align-items:center;gap:6px;font:500 12px 'DM Mono';color:var(--select-color);cursor:pointer;user-select:none}.pnl-toggle input{accent-color:var(--cyan);width:14px;height:14px;cursor:pointer}.pnl-toggle:hover{color:var(--cyan)}
 .toolbar-toggle{width:30px;height:30px;flex:none;border:1px solid var(--line-soft-2);border-radius:4px;background:var(--input-bg);color:var(--select-color);cursor:pointer;font-size:13px;line-height:1}
 .toolbar-toggle:hover{color:var(--cyan);border-color:var(--accent-line);background:var(--hover-bg)}
 .toolbar-toggle.active{color:var(--cyan);background:var(--accent-bg);border-color:var(--accent-line)}
