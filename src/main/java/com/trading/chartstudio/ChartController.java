@@ -753,6 +753,9 @@ public class ChartController {
         if (from != null) {
             candles = candles.stream().filter(candle -> candle.time() >= from * 1000).toList();
         }
+        if (to != null) {
+            candles = candles.stream().filter(candle -> candle.time() <= to * 1000).toList();
+        }
         return ResponseEntity.ok(new CandleResponse(safeProvider, symbol.toUpperCase(Locale.ROOT), interval, candles));
     }
 

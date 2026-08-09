@@ -1158,12 +1158,20 @@ async function setup() {
     }
   }
   $('#provider').dispatchEvent(new Event('change'));
-  $('#symbol').addEventListener('change', load);
+  $('#symbol').addEventListener('change', () => {
+    if (inBacktestMode && backtestRuns.length) {
+      const target = $('#symbol').value;
+      if (backtestRuns.some(run => run.symbol === target)) { showBacktestChart(target); return; }
+      inBacktestMode = false;
+    }
+    load();
+  });
   $('#refreshSymbols').onclick = async () => { const groups = await (await fetch('/api/symbols')).json(); const val = $('#symbol').value, selected = [...$('#backtestSymbols').selectedOptions].map(o => o.value); const options = groups.map(g => `<optgroup label="${g.category}">${g.symbols.map(s => `<option value="${s.value}">${s.label}</option>`).join('')}</optgroup>`).join(''); $('#symbol').innerHTML = options; $('#backtestSymbols').innerHTML = options; $('#symbol').value = val; [...$('#backtestSymbols').options].forEach(o => o.selected = selected.includes(o.value)); };
   $('#timeframes').onclick = e => {
     if (!e.target.dataset.i) return;
     interval = e.target.dataset.i;
     $$('#timeframes button').forEach(b => b.classList.toggle('active', b === e.target));
+    if (inBacktestMode && backtestRuns.length) inBacktestMode = false;
     load();
   };
   $$('.chart-type').forEach(button => button.onclick = () => {
@@ -1570,7 +1578,7 @@ async function runBacktest() {
       const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${period}&from=${from}&to=${to}&limit=${limit}`);
       if (!response.ok) throw new Error(symbol);
       const data = await response.json();
-      return { symbol, data: data.candles };
+      return { symbol, data: (data.candles || []).filter(candle => candle.time >= from * 1000 && candle.time <= to * 1000) };
     }));
     backtestCapital = capital;
     backtestRuns = executeBacktestShared(symbolsData, strategy, strategyParams(), quantity, capital);
