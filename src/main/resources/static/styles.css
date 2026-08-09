@@ -116,9 +116,11 @@ hr{border:0;border-top:1px solid var(--line);margin:23px 0}
 .chart-wrap{position:relative;flex:1;min-width:0}
 .workspace-top{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 25px;font:12px 'DM Mono'}
 .workspace-top #instrument{font:600 14px Manrope}.exchange{font-size:9px;border:1px solid var(--accent-line);color:var(--cyan);border-radius:2px;padding:2px 4px;margin-left:7px}.workspace-top b{font-weight:500;color:var(--quote-num)}
+.backtest-stock-select{margin-left:12px;background:var(--panel-2,#141a21);color:var(--quote);border:1px solid var(--line);border-radius:4px;font:600 12px 'DM Mono';padding:3px 6px;max-width:220px}.backtest-stock-select:hover{border-color:var(--accent-line)}
 .quote{display:flex;gap:15px;color:var(--quote)}.quote strong{color:var(--green-2);font-weight:500}
 .workspace #chart{height:min(62vh,620px);min-height:440px}
 .chart-footer{height:35px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px;color:var(--faint-2);font:10px 'DM Mono'}
+.pnl-badge{position:absolute;z-index:5;top:12px;right:14px;padding:8px 14px;border-radius:8px;background:var(--panel-2,#141a21);border:1px solid var(--line);box-shadow:0 6px 18px rgba(0,0,0,.35);font:600 13px Manrope;color:var(--quote);pointer-events:none;display:flex;flex-direction:column;align-items:flex-end;gap:2px}.pnl-badge b{font:600 16px Manrope}.pnl-badge .pnl-positive{color:var(--green-2)}.pnl-badge .pnl-negative{color:var(--red-2)}
 .empty-state{position:absolute;z-index:2;bottom:48px;left:50%;transform:translateX(-50%);color:var(--faint);font-size:10px;pointer-events:none}.empty-state.hidden{display:none}
 
 /* Strategy panel below the chart */
@@ -153,7 +155,7 @@ hr{border:0;border-top:1px solid var(--line);margin:23px 0}
 
 /* Custom strategy */
 .custom-rule-heading{display:flex;justify-content:space-between;align-items:center;margin-top:11px;color:var(--muted);font:9px 'DM Mono';letter-spacing:.4px}.custom-rule-heading span{display:flex;align-items:center;gap:5px}.custom-rule-heading select{width:auto;padding:2px 4px;font:9px 'DM Mono'}.custom-rule-heading button,#newCustomStrategy{border:0;background:none;color:var(--cyan);font:10px 'DM Mono';cursor:pointer}
-.custom-condition{display:grid;grid-template-columns:1fr auto auto auto 1fr auto auto auto .18fr;gap:4px;margin-top:5px;align-items:center}.custom-condition select,.custom-condition input{min-width:0;padding:6px 4px;font:9px 'DM Mono'}.custom-condition button{border:0;background:none;color:var(--muted);cursor:pointer}.cc-signal{width:78px}.cc-operator{width:96px}.cc-connector{width:52px}.cc-number{width:70px}.cc-params{display:flex;gap:4px;flex-wrap:wrap}.cc-params input{width:44px}
+.custom-condition{display:grid;grid-template-columns:1fr auto auto auto 1fr auto auto auto .18fr;gap:4px;margin-top:5px;align-items:center}.custom-condition select,.custom-condition input{min-width:0;padding:6px 4px;font:9px 'DM Mono'}.custom-condition button{border:0;background:none;color:var(--muted);cursor:pointer}.cc-signal{width:78px}.cc-operator{width:96px}.cc-connector{width:52px}.cc-number{width:70px}.cc-params{display:flex;gap:4px;flex-wrap:wrap}.cc-params input{width:44px}.cc-math{grid-column:span 3;display:flex;gap:4px;flex-wrap:wrap;align-items:center;min-width:0}.cc-mathop{width:42px}
 .target-settings{display:flex;gap:7px;margin-top:10px}.target-settings label{flex:1;color:var(--muted);font:9px 'DM Mono'}.target-settings select,.target-settings input{margin-top:4px;padding:6px 5px;font:10px 'DM Mono'}
 
 /* Dialog + toast */
