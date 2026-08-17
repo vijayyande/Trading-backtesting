@@ -191,9 +191,17 @@ function initChart() {
     layout: { background: { color: t.bg }, textColor: t.text, fontFamily: "'DM Mono', monospace" },
     grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
     rightPriceScale: { borderColor: t.border },
-    timeScale: { borderColor: t.border, timeVisible: true, tickMarkFormatter: t => new Date(t * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) },
+    timeScale: { borderColor: t.border, timeVisible: true, tickMarkFormatter: t => {
+      const d = new Date(t * 1000), opts = { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', year: 'numeric' };
+      if (interval !== '1d') { opts.hour = '2-digit'; opts.minute = '2-digit'; }
+      return d.toLocaleString('en-IN', opts);
+    } },
     crosshair: { vertLine: { color: t.crosshair }, horzLine: { color: t.crosshair } },
-    localization: { timeFormatter: t => new Date(t * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }
+    localization: { timeFormatter: t => {
+      const d = new Date(t * 1000), opts = { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', year: 'numeric' };
+      if (interval !== '1d') { opts.hour = '2-digit'; opts.minute = '2-digit'; }
+      return d.toLocaleString('en-IN', opts);
+    } }
   });
   window.addEventListener('resize', () => chart.applyOptions({ width: $('#chart').clientWidth, height: $('#chart').clientHeight }));
   chart.subscribeCrosshairMove(param => {
@@ -1282,6 +1290,7 @@ async function setup() {
   $('#vaultDialogClose').onclick = () => { document.getElementById('vaultDialog').close(); };
   $('#vaultDialogDone').onclick = () => { document.getElementById('vaultDialog').close(); };
   $('#vaultLogout').onclick = logout;
+  restoreBacktestSettings();
 }
 function showIndicators() {
   $('#indicatorList').innerHTML = active.map((item, i) => {
@@ -1618,10 +1627,19 @@ function exportBacktest() {
   const invested = backtestCapital || backtestRuns.reduce((sum, run) => sum + run.allocated, 0), pnl = backtestRuns.length ? backtestRuns[0].pnl : 0;
   const trades = orders.filter(order => order.type === 'SELL' && order.pnl != null), wins = trades.filter(order => order.pnl > 0).length;
   const summary = [['Backtest Summary', 'Value'], ['Stocks tested', backtestRuns.length], ['Capital', invested], ['Net profit / loss', pnl], ['Return %', invested ? pnl / invested : 0], ['Completed trades', trades.length], ['Win rate', trades.length ? wins / trades.length : 0], ['Gross profit', trades.filter(order => order.pnl > 0).reduce((sum, order) => sum + order.pnl, 0)], ['Gross loss', trades.filter(order => order.pnl < 0).reduce((sum, order) => sum + order.pnl, 0)]];
-  const rows = orders.map(order => ({ Stock: order.symbol, Time: new Date(order.time), Side: order.type, Exit_reason: order.forced ? 'End of test' : order.reason || '', Quantity: order.qty, Price: order.price, Amount: order.amount, Profit_Loss: order.pnl ?? null }));
+  const ist = t => new Date(t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const rows = orders.map(order => ({ Stock: order.symbol, Time: ist(order.time), Side: order.type, Exit_reason: order.forced ? 'End of test' : order.reason || '', Quantity: order.qty, Price: order.price, Amount: order.amount, Profit_Loss: order.pnl ?? null }));
   const workbook = XLSX.utils.book_new(), summarySheet = XLSX.utils.aoa_to_sheet(summary), tradesSheet = XLSX.utils.json_to_sheet(rows);
   summarySheet['!cols'] = [{ wch: 24 }, { wch: 18 }]; tradesSheet['!cols'] = [{ wch: 18 }, { wch: 22 }, { wch: 10 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
   XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary'); XLSX.utils.book_append_sheet(workbook, tradesSheet, 'Trades');
+  backtestRuns.forEach(run => {
+    const sheetName = run.symbol.replace(/[^A-Za-z0-9_\- ]/g, '-').slice(0, 31) || 'OHLC';
+    const ohlcData = [['Time', 'Open', 'High', 'Low', 'Close', 'Volume']];
+    run.data.forEach(c => ohlcData.push([ist(c.time), c.open, c.high, c.low, c.close, c.volume]));
+    const ohlcSheet = XLSX.utils.aoa_to_sheet(ohlcData);
+    ohlcSheet['!cols'] = [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(workbook, ohlcSheet, sheetName);
+  });
   XLSX.writeFile(workbook, `backtest-results-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 function clearBacktest() {
@@ -2022,4 +2040,46 @@ function initTheme() {
     setSeries();
   });
 }
+function saveBacktestSettings() {
+  try {
+    const s = {
+      provider: $('#provider').value,
+      symbol: $('#symbol').value,
+      interval, chartType,
+      strategy: $('#strategy').value,
+      strategyParams: Object.fromEntries($$('#strategyParams input').map(i => [i.dataset.k, i.value])),
+      backtestInterval: $('#backtestInterval').value,
+      backtestStart: $('#backtestStart').value,
+      backtestEnd: $('#backtestEnd').value,
+      backtestQuantity: $('#backtestQuantity').value,
+      backtestCapital: $('#backtestCapital').value,
+      backtestMaxTrades: $('#backtestMaxTrades').value,
+      selectedSymbols: selectedSymbols(),
+      indicators: active.map(i => ({ name: i.name, config: { ...i.config } })),
+      hasBacktestRuns: backtestRuns.length > 0,
+    };
+    localStorage.setItem('prism.pageSettings', JSON.stringify(s));
+  } catch {}
+}
+async function restoreBacktestSettings() {
+  let s;
+  try { s = JSON.parse(localStorage.getItem('prism.pageSettings')); } catch { return; }
+  if (!s) return;
+  if (s.provider) $('#provider').value = s.provider;
+  if (s.symbol) $('#symbol').value = s.symbol;
+  if (s.interval) { interval = s.interval; $$('#timeframes button').forEach(b => b.classList.toggle('active', b.dataset.i === s.interval)); }
+  if (s.chartType) { chartType = s.chartType; $$('.chart-type').forEach(b => b.classList.toggle('active', b.dataset.type === s.chartType)); setSeries(); }
+  if (s.strategy) { $('#strategy').value = s.strategy; $('#strategy').dispatchEvent(new Event('change')); }
+  if (s.strategyParams) $$('#strategyParams input').forEach(i => { if (i.dataset.k in s.strategyParams) i.value = s.strategyParams[i.dataset.k]; });
+  if (s.backtestInterval) $('#backtestInterval').value = s.backtestInterval;
+  if (s.backtestStart) $('#backtestStart').value = s.backtestStart;
+  if (s.backtestEnd) $('#backtestEnd').value = s.backtestEnd;
+  if (s.backtestQuantity) $('#backtestQuantity').value = s.backtestQuantity;
+  if (s.backtestCapital) $('#backtestCapital').value = s.backtestCapital;
+  if (s.backtestMaxTrades) $('#backtestMaxTrades').value = s.backtestMaxTrades;
+  if (s.selectedSymbols?.length) setSelectedSymbols(s.selectedSymbols);
+  if (s.indicators?.length) { active = s.indicators.map(i => ({ name: i.name, config: { ...i.config } })); showIndicators(); render(); }
+  if (s.hasBacktestRuns) { await runBacktest(); }
+}
+window.addEventListener('beforeunload', saveBacktestSettings);
 setup();
