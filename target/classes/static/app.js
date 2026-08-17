@@ -394,7 +394,7 @@ function drawDrawingShape(d, target) {
       ctx.beginPath(); ctx.arc(a.x, a.y, 3, 0, Math.PI * 2); ctx.fillStyle = d.color; ctx.fill();
       ctx.beginPath(); ctx.arc(b.x, b.y, 3, 0, Math.PI * 2); ctx.fillStyle = d.color; ctx.fill();
       const dp = pts[1].price - pts[0].price, dt = Math.abs(Math.round((pts[1].time - pts[0].time) / 86400));
-      label(`${dp >= 0 ? '+' : ''}${Number(dp).toFixed(2)}  ·  ${dt}d`, (a.x + b.x) / 2, Math.min(a.y, b.y) - 12, 'center');
+      label(`${dp >= 0 ? '+' : ''}${Number(dp).toFixed(2)}  -  ${dt}d`, (a.x + b.x) / 2, Math.min(a.y, b.y) - 12, 'center');
       handle(pts[0]); handle(pts[1]);
     } else if (d.type === 'area') {
       const a = to(pts[0]), b = to(pts[1]);
@@ -1300,8 +1300,8 @@ function showIndicators() {
       <span>${item.name}</span>
       ${indicatorParams(item.name).map(([key, label, fallback]) => `<label>${label}<input aria-label="${item.name} ${label}" data-config-index="${i}" data-config-key="${key}" type="number" step="any" min="0" value="${config[key] ?? fallback}"></label>`).join('')}
       <label>Color<input type="color" data-config-index="${i}" data-config-key="color" value="${color}"></label>
-      <button class="apply" data-apply-index="${i}">Apply</button>
-      <button aria-label="Remove ${item.name}" data-remove-index="${i}">x</button>
+      <button class="apply" data-apply-index="${i}" data-icon="&#x2713;">Apply</button>
+      <button aria-label="Remove ${item.name}" data-remove-index="${i}" data-icon="&#x2715;">x</button>
     </div>`;
   }).join('');
   const applyConfig = index => {
@@ -1613,7 +1613,7 @@ function renderBacktestResults() {
   const stats = backtestRuns.reduce((total, run) => ({ trades: total.trades + run.stats.trades, wins: total.wins + run.stats.wins, grossProfit: total.grossProfit + run.stats.grossProfit, grossLoss: total.grossLoss + run.stats.grossLoss }), { trades: 0, wins: 0, grossProfit: 0, grossLoss: 0 });
   const winRate = stats.trades ? stats.wins / stats.trades * 100 : 0, returnPct = invested ? pnl / invested * 100 : 0;
   element.hidden = false;
-  element.innerHTML = `<div class="backtest-head"><span><strong>BACKTEST RESULTS</strong> · ${backtestRuns.length} stock${backtestRuns.length === 1 ? '' : 's'} · Capital ${money(invested)} · Net <span class="${pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${pnl >= 0 ? '+' : ''}${money(pnl)}</span></span><span><button id="exportBacktest" class="export-results">Export Excel</button><button class="close-results" aria-label="Close results">×</button></span></div>` +
+  element.innerHTML = `<div class="backtest-head"><span><strong>BACKTEST RESULTS</strong> · ${backtestRuns.length} stock${backtestRuns.length === 1 ? '' : 's'} · Capital ${money(invested)} · Net <span class="${pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${pnl >= 0 ? '+' : ''}${money(pnl)}</span></span><span><button id="exportBacktest" class="export-results" data-icon="&#x1F4E5;">Export Excel</button><button class="close-results" aria-label="Close results" data-icon="&#x2715;">×</button></span></div>` +
     `<div class="backtest-stats"><span>Trades <b>${stats.trades}</b></span><span>Win rate <b>${winRate.toFixed(1)}%</b></span><span>Gross profit <b class="pnl-positive">${money(stats.grossProfit)}</b></span><span>Gross loss <b class="pnl-negative">${money(stats.grossLoss)}</b></span><span>Return <b class="${returnPct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}%</b></span></div>` +
     `<table><thead><tr><th>Stock</th><th>Time</th><th>Side</th><th>Qty</th><th>Price</th><th>Amount</th><th>Profit / Loss</th></tr></thead><tbody>${orders.map(order => `<tr data-symbol="${order.symbol}"><td>${order.symbol}</td><td>${dateTime(order.time)}</td><td class="${order.type === 'BUY' ? 'pnl-positive' : 'pnl-negative'}">${order.type}${order.forced ? ' (exit)' : order.reason === 'STOP' ? ' (stop)' : order.reason === 'TARGET' ? ' (target)' : ''}</td><td>${order.qty}</td><td>${money(order.price)}</td><td>${money(order.amount)}</td><td class="${order.pnl == null ? '' : order.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${order.pnl == null ? '—' : `${order.pnl >= 0 ? '+' : ''}${money(order.pnl)}`}</td></tr>`).join('') || '<tr><td colspan="7">No executable trades in this period.</td></tr>'}</tbody></table>`;
   $('.close-results').onclick = clearBacktest;
@@ -1779,7 +1779,7 @@ async function openVaultDialog() {
   const brokerNames = { 'angel-one': 'Angel One', 'zerodha': 'Zerodha', 'upstox': 'Upstox', 'fyers': 'Fyers' };
   $('#vaultList').innerHTML = Object.entries(byBroker).map(([broker, items]) =>
     '<div class="vault-group"><div class="vault-group-name">' + (brokerNames[broker] || broker) + '</div>' +
-    items.map(p => '<div class="vault-item"><span class="vault-item-name">' + escapeHtml(p.name) + '</span><span class="vault-actions"><button data-use="' + p.id + '">Use</button><button data-delete="' + p.id + '" class="danger">Delete</button></span></div>').join('') +
+    items.map(p => '<div class="vault-item"><span class="vault-item-name">' + escapeHtml(p.name) + '</span><span class="vault-actions"><button data-use="' + p.id + '" data-icon="&#x2713;">Use</button><button data-delete="' + p.id + '" class="danger" data-icon="&#x1F5D1;">Delete</button></span></div>').join('') +
     '</div>').join('');
   $('#vaultEmpty').style.display = account.profiles.length ? 'none' : 'block';
   $$('#vaultList [data-use]').forEach(b => b.onclick = () => reuseSavedProfile(Number(b.dataset.use)));
