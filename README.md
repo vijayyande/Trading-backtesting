@@ -1,4 +1,4 @@
-# Prism Charts
+# SSS Backtest
 
 Spring Boot charting workspace for Indian-market symbols. It includes a responsive candlestick, bar, or line chart; intervals from one minute to one day; and a configurable technical-indicator layer.
 
@@ -66,3 +66,6 @@ Supported intervals are `1m`, `5m`, `15m`, `1h`, and `1d`.
 ## Indicators
 
 Each selected indicator can use its own period (2–200). The chart supports moving averages (SMA, EMA, WMA, DEMA, TEMA, HMA, KAMA), trend overlays (Parabolic SAR, Supertrend, Ichimoku), channels and volatility (Bollinger, Keltner, Donchian, Envelopes, ATR, standard deviation, historical volatility), momentum (RSI, MACD, PPO, Stochastic, Williams %R, CCI, ROC, Momentum, Awesome Oscillator, Aroon, TRIX, DPO), and volume/trend-strength indicators (VWAP, OBV, MFI, CMF, ADL, Chaikin Oscillator, Force Index, ADX, Vortex).
+
+
+<img width="1790" height="3107" alt="image" src="https://github.com/user-attachments/assets/236d60bc-1a7a-49af-aca5-4ea8121c7d3e" />
