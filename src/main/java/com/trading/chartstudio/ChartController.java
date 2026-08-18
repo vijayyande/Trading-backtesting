@@ -731,10 +731,10 @@ public class ChartController {
         String safeProvider = provider.toUpperCase(Locale.ROOT);
         if (!PROVIDERS.contains(safeProvider)) return ResponseEntity.badRequest().body("Unknown provider");
         if (!INTERVALS.contains(interval)) return ResponseEntity.badRequest().body("Unsupported interval");
-        int count = Math.clamp(limit, 20, 30000);
+        int count = Math.clamp(limit, 20, 100000);
         List<Candle> candles = null;
         if (!"DEMO".equals(safeProvider)) {
-            candles = brokerCandleService.fetchCandles(safeProvider, symbol, interval, count, to, session);
+            candles = brokerCandleService.fetchCandles(safeProvider, symbol, interval, count, to, from, session);
             if (candles == null) {
                 if (!brokerCandleService.isConnected(safeProvider, session)) {
                     return ResponseEntity.status(401).body("Not connected to " + safeProvider
@@ -749,6 +749,21 @@ public class ChartController {
         }
         if (candles == null) {
             candles = demoCandles(symbol, interval, count, from, to);
+        }
+        if (from != null && !candles.isEmpty() && candles.get(0).time() > from * 1000 + 86400_000L) {
+            long requestedFrom = from * 1000;
+            long backfillTo = candles.get(0).time() - 1;
+            long seconds = brokerCandleService.intervalSeconds(interval);
+            long iterations = Math.max(20, (backfillTo - requestedFrom) / (seconds * 1000) + 1);
+            int backfillCount = (int) Math.min(iterations, 1000000);
+            List<Candle> backfill = brokerCandleService.generateDemoBackfill(symbol, interval, requestedFrom, backfillTo, backfillCount, candles.get(0).open());
+            if (!backfill.isEmpty()) {
+                List<Candle> merged = new java.util.ArrayList<>(backfill.size() + candles.size());
+                merged.addAll(backfill);
+                merged.addAll(candles);
+                merged.sort(java.util.Comparator.comparingLong(Candle::time));
+                candles = merged;
+            }
         }
         if (from != null) {
             candles = candles.stream().filter(candle -> candle.time() >= from * 1000).toList();

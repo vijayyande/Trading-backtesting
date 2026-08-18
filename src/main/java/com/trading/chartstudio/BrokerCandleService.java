@@ -194,10 +194,10 @@ public class BrokerCandleService {
     }
 
     public List<ChartController.Candle> fetchCandles(String provider, String symbol, String interval, int count, HttpSession session) {
-        return fetchCandles(provider, symbol, interval, count, null, session);
+        return fetchCandles(provider, symbol, interval, count, null, null, session);
     }
 
-    public List<ChartController.Candle> fetchCandles(String provider, String symbol, String interval, int count, Long toTimeSec, HttpSession session) {
+    public List<ChartController.Candle> fetchCandles(String provider, String symbol, String interval, int count, Long toTimeSec, Long fromTimeSec, HttpSession session) {
         String cacheKey = provider + ":" + symbol.toUpperCase(Locale.ROOT) + ":" + interval;
         if (toTimeSec == null) {
             List<ChartController.Candle> fresh = lastKnown.get(cacheKey);
@@ -207,8 +207,8 @@ public class BrokerCandleService {
             }
         }
         List<ChartController.Candle> result = switch (provider) {
-            case "ZERODHA" -> fetchZerodhaCandles(symbol, interval, count, toTimeSec, session);
-            case "ANGEL_ONE" -> fetchAngelCandles(symbol, interval, count, toTimeSec, session);
+            case "ZERODHA" -> fetchZerodhaCandles(symbol, interval, count, fromTimeSec, toTimeSec, session);
+            case "ANGEL_ONE" -> fetchAngelCandles(symbol, interval, count, fromTimeSec, toTimeSec, session);
             default -> null;
         };
         if (result != null && !result.isEmpty()) {
@@ -396,16 +396,124 @@ public class BrokerCandleService {
     public List<ChartController.Candle> generateDemoRange(String symbol, String interval, long fromTimeMs, long toTimeMs, int maxCount) {
         long seconds = getIntervalSeconds(interval);
         long expected = Math.max(20, (toTimeMs - fromTimeMs) / (seconds * 1000) + 5);
-        int count = (int) Math.min(maxCount, Math.min(expected, 5000));
-        return generateDemoTo(symbol, interval, count, toTimeMs).stream()
-            .filter(c -> c.time() >= fromTimeMs && c.time() <= toTimeMs).toList();
+        int count = (int) Math.min(expected, maxCount);
+        return generateDemoForward(symbol, interval, count, fromTimeMs, toTimeMs);
+    }
+
+    private List<ChartController.Candle> generateDemoForward(String symbol, String interval, int count, long fromTimeMs, long toTimeMs) {
+        long seconds = getIntervalSeconds(interval);
+        java.util.Random random = new java.util.Random((long) symbol.hashCode() * 31 + interval.hashCode() * 37);
+        double price = demoBasePrice(symbol);
+        ZoneId ist = ZoneId.of("Asia/Kolkata");
+        boolean isDaily = "1d".equals(interval);
+        double volScale = Math.max(Math.sqrt(seconds / 86400.0), .06);
+        List<ChartController.Candle> result = new ArrayList<>();
+        long currentMs = floorToIntervalStart(fromTimeMs, seconds, isDaily, ist);
+        int maxIterations = Math.max(count * 30, (int) Math.ceil(3.0 * 86400 / seconds));
+        int lastSessionDay = -1;
+        for (int iter = 0; result.size() < count && iter < maxIterations && currentMs <= toTimeMs; iter++) {
+            ZonedDateTime zdt = Instant.ofEpochMilli(currentMs).atZone(ist);
+            int dow = zdt.getDayOfWeek().getValue();
+            if (dow >= 1 && dow <= 5) {
+                int minutes = zdt.getHour() * 60 + zdt.getMinute();
+                boolean validTime;
+                if (isDaily) {
+                    validTime = true;
+                } else if (symbol.startsWith("MCX:")) {
+                    validTime = minutes >= 540 && minutes < 1410;
+                } else if (symbol.startsWith("GLOBAL:")) {
+                    validTime = true;
+                } else {
+                    validTime = minutes >= 555 && minutes < 930;
+                }
+                if (validTime) {
+                    int dayKey = zdt.getDayOfYear();
+                    if (dayKey != lastSessionDay) {
+                        if (lastSessionDay != -1) {
+                            double gap = (random.nextDouble() - .48) * price * .025;
+                            price = Math.max(1, price + gap);
+                        }
+                        lastSessionDay = dayKey;
+                    }
+                    double open = price;
+                    double change = (random.nextDouble() - .48) * price * .018 * volScale;
+                    double close = Math.max(1, open + change);
+                    double upperWick = random.nextDouble() * price * .005 * volScale;
+                    double lowerWick = random.nextDouble() * price * .005 * volScale;
+                    double high = Math.max(open, close) + upperWick;
+                    double low = Math.min(open, close) - lowerWick;
+                    long volume = 80_000 + random.nextInt(1_500_000);
+                    result.add(new ChartController.Candle(currentMs, round(open), round(high), round(low), round(close), volume));
+                    price = close;
+                }
+            }
+            currentMs += seconds * 1000;
+        }
+        return result;
+    }
+
+    public long intervalSeconds(String interval) {
+        return getIntervalSeconds(interval);
+    }
+
+    public List<ChartController.Candle> generateDemoBackfill(String symbol, String interval, long fromTimeMs, long toTimeMs, int maxCount, double anchorPrice) {
+        long seconds = getIntervalSeconds(interval);
+        java.util.Random random = new java.util.Random((long) symbol.hashCode() * 31 + interval.hashCode() * 37);
+        ZoneId ist = ZoneId.of("Asia/Kolkata");
+        boolean isDaily = "1d".equals(interval);
+        double volScale = Math.max(Math.sqrt(seconds / 86400.0), .06);
+        List<ChartController.Candle> result = new ArrayList<>();
+        long currentMs = floorToIntervalStart(toTimeMs, seconds, isDaily, ist);
+        int maxIterations = Math.max(maxCount * 30, (int) Math.ceil(3.0 * 86400 / seconds));
+        double nextOpen = Math.max(1, anchorPrice);
+        int lastSessionDay = -1;
+        for (int iter = 0; result.size() < maxCount && iter < maxIterations && currentMs >= fromTimeMs; iter++) {
+            ZonedDateTime zdt = Instant.ofEpochMilli(currentMs).atZone(ist);
+            int dow = zdt.getDayOfWeek().getValue();
+            if (dow >= 1 && dow <= 5) {
+                int minutes = zdt.getHour() * 60 + zdt.getMinute();
+                boolean validTime;
+                if (isDaily) {
+                    validTime = true;
+                } else if (symbol.startsWith("MCX:")) {
+                    validTime = minutes >= 540 && minutes < 1410;
+                } else if (symbol.startsWith("GLOBAL:")) {
+                    validTime = true;
+                } else {
+                    validTime = minutes >= 555 && minutes < 930;
+                }
+                if (validTime) {
+                    int dayKey = zdt.getDayOfYear();
+                    if (dayKey != lastSessionDay) {
+                        if (lastSessionDay != -1) {
+                            double gap = (random.nextDouble() - .5) * nextOpen * .025;
+                            nextOpen = Math.max(1, nextOpen + gap);
+                        }
+                        lastSessionDay = dayKey;
+                    }
+                    double close = nextOpen;
+                    double change = (random.nextDouble() - .5) * nextOpen * .018 * volScale;
+                    double open = Math.max(1, close - change);
+                    double upperWick = random.nextDouble() * nextOpen * .005 * volScale;
+                    double lowerWick = random.nextDouble() * nextOpen * .005 * volScale;
+                    double high = Math.max(open, close) + upperWick;
+                    double low = Math.min(open, close) - lowerWick;
+                    long volume = 80_000 + random.nextInt(1_500_000);
+                    result.add(new ChartController.Candle(currentMs, round(open), round(high), round(low), round(close), volume));
+                    nextOpen = open;
+                }
+            }
+            currentMs -= seconds * 1000;
+        }
+        java.util.Collections.reverse(result);
+        return result;
     }
 
     private long getIntervalSeconds(String interval) {
         return switch (interval) { case "1m" -> 60; case "5m" -> 300; case "15m" -> 900; case "1h" -> 3600; default -> 86400; };
     }
 
-    private List<ChartController.Candle> fetchZerodhaCandles(String symbol, String interval, int count, Long toTimeSec, HttpSession session) {
+    private List<ChartController.Candle> fetchZerodhaCandles(String symbol, String interval, int count, Long fromTimeSec, Long toTimeSec, HttpSession session) {
         try {
             String accessToken = resolveZerodhaAccessToken(session);
             String apiKey = resolveZerodhaApiKey(session);
@@ -424,7 +532,7 @@ public class BrokerCandleService {
             };
             long now = toTimeSec != null ? toTimeSec : Instant.now().getEpochSecond();
             long intervalSeconds = getIntervalSeconds(interval);
-            long from = now - count * intervalSeconds;
+            long from = fromTimeSec != null ? fromTimeSec : now - count * intervalSeconds;
 
             String cacheKey = "ZERODHA:" + instrumentToken + ":" + interval + ":" + from + ":" + now;
             List<ChartController.Candle> cached = cache.get(cacheKey);
@@ -569,7 +677,7 @@ public class BrokerCandleService {
             if (token == null) return null;
             String key = "ZERODHA:" + token + ":" + interval;
             LiveBar live = refreshLiveBar(zerodhaLiveBars, key, exchange, interval,
-                () -> fetchZerodhaCandles(symbol, interval, 2, null, session));
+                () -> fetchZerodhaCandles(symbol, interval, 2, null, null, session));
             if (live == null) return null;
             Double ltp = fetchLastPrice(symbol, session);
             if (ltp == null) return live.candle();
@@ -595,7 +703,7 @@ public class BrokerCandleService {
             if (token == null) return null;
             String key = "ANGEL:" + exchange + ":" + token + ":" + interval;
             LiveBar live = refreshLiveBar(angelLiveBars, key, exchange, interval,
-                () -> fetchAngelCandlesByToken(exchange, tradingSymbol, token, interval, 2, null, apiKey, accessToken, ip, session));
+                () -> fetchAngelCandlesByToken(exchange, tradingSymbol, token, interval, 2, null, null, apiKey, accessToken, ip, session));
             if (live == null) return null;
             Double ltp = fetchAngelLtp(exchange, token, apiKey, accessToken, ip, session);
             if (ltp == null) return live.candle();
@@ -653,7 +761,7 @@ public class BrokerCandleService {
         return minutes >= 555 && minutes < 930;
     }
 
-    private List<ChartController.Candle> fetchAngelCandles(String symbol, String interval, int count, Long toTimeSec, HttpSession session) {
+    private List<ChartController.Candle> fetchAngelCandles(String symbol, String interval, int count, Long fromTimeSec, Long toTimeSec, HttpSession session) {
         try {
             String accessToken = resolveAngelAccessToken(session);
             String apiKey = resolveAngelApiKey(session);
@@ -665,7 +773,7 @@ public class BrokerCandleService {
             String ip = angelClientIp(session);
             String token = resolveAngelToken(exchange, tradingSymbol, apiKey, accessToken, ip, session);
             if (token == null) return null;
-            return fetchAngelCandlesByToken(exchange, tradingSymbol, token, interval, count, toTimeSec, apiKey, accessToken, ip, session);
+            return fetchAngelCandlesByToken(exchange, tradingSymbol, token, interval, count, fromTimeSec, toTimeSec, apiKey, accessToken, ip, session);
         } catch (Exception e) {
             return null;
         }
@@ -677,13 +785,13 @@ public class BrokerCandleService {
     }
 
     private List<ChartController.Candle> fetchAngelCandlesByToken(String exchange, String tradingSymbol, String token,
-                                                                  String interval, int count, Long toTimeSec,
-                                                                  String apiKey, String accessToken, String ip,
-                                                                  HttpSession session) {
+                                                                   String interval, int count, Long fromTimeSec, Long toTimeSec,
+                                                                   String apiKey, String accessToken, String ip,
+                                                                   HttpSession session) {
         try {
             long nowSec = toTimeSec != null ? toTimeSec : Instant.now().getEpochSecond();
             long intervalSeconds = getIntervalSeconds(interval);
-            long fromSec = nowSec - count * intervalSeconds;
+            long fromSec = fromTimeSec != null ? fromTimeSec : nowSec - count * intervalSeconds;
             String cacheKey = "ANGEL:" + token + ":" + interval + ":" + fromSec + ":" + nowSec;
             List<ChartController.Candle> cached = cache.get(cacheKey);
             if (cached != null) return cached;

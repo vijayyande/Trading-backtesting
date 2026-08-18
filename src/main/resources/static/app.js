@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 const COLORS = ['#47d7d1', '#f1bd56', '#b88cff', '#f27675', '#75b9ff', '#9bdc71'];
-let chart, mainSeries, candles = [], interval = '5m', chartType = 'candlestick', active = [], liveTimer, loadingMore = false, noMoreHistory = false, backtestRuns = [], backtestCapital = 0, inBacktestMode = false, customStrategies = new Map(), customDraft = { entryConditions: [], exitConditions: [], stopLoss: 0 };
+let chart, mainSeries, candles = [], interval = '5m', chartType = 'candlestick', active = [], liveTimer, loadingMore = false, noMoreHistory = false, backtestRuns = [], backtestCapital = 0, inBacktestMode = false, loadGeneration = 0, customStrategies = new Map(), customDraft = { entryConditions: [], exitConditions: [], stopLoss: 0 };
 let account = { loggedIn: false, username: '', profiles: [] }, accountMode = 'login';
 let pnlBadgeVisible = (() => { try { return localStorage.getItem('prism.showPnlBadge') !== '0'; } catch { return true; } })();
 let indicatorPane = 0;
@@ -191,7 +191,7 @@ function initChart() {
     layout: { background: { color: t.bg }, textColor: t.text, fontFamily: "'DM Mono', monospace" },
     grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
     rightPriceScale: { borderColor: t.border },
-    timeScale: { borderColor: t.border, timeVisible: true, tickMarkFormatter: t => {
+    timeScale: { borderColor: t.border, timeVisible: true, minBarSpacing: 0.01, tickMarkFormatter: t => {
       const d = new Date(t * 1000), opts = { timeZone: 'Asia/Kolkata', hour12: false, day: '2-digit', month: 'short', year: 'numeric' };
       if (interval !== '1d') { opts.hour = '2-digit'; opts.minute = '2-digit'; }
       return d.toLocaleString('en-IN', opts);
@@ -733,9 +733,18 @@ function render(fit = true) {
   if (!candles.length) return;
   const data = chartType === 'line' ? candles.map(x => ({ time: x.time / 1000, value: x.close }))
     : candles.map(x => ({ time: x.time / 1000, open: x.open, high: x.high, low: x.low, close: x.close }));
-  mainSeries.setData(data); removeIndicators(); indicatorPane = 0; active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); layoutPanes();
-  if (inBacktestMode && backtestRuns.length) { const run = backtestRuns.find(item => item.symbol === $('#backtestStockSelect').value) || backtestRuns[0]; if (run) backtestMarkers(run); }
-  if (fit) chart.timeScale().fitContent();
+  mainSeries.setData(data);
+  if (candles.length > 20000) {
+    if (fit) chart.timeScale().fitContent();
+    setTimeout(() => {
+      try { removeIndicators(); indicatorPane = 0; active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); layoutPanes(); } catch(e) {}
+      if (inBacktestMode) { const run = backtestRuns.find(item => item.symbol === $('#backtestStockSelect').value) || backtestRuns[0]; if (run) backtestMarkers(run); }
+    }, 50);
+  } else {
+    try { removeIndicators(); indicatorPane = 0; active.forEach((item, i) => drawIndicator(item.name, item.config?.color || COLORS[i % COLORS.length], item.config || { period: item.period || 14 })); layoutPanes(); } catch(e) {}
+    if (inBacktestMode) { const run = backtestRuns.find(item => item.symbol === $('#backtestStockSelect').value) || backtestRuns[0]; if (run) backtestMarkers(run); }
+    if (fit) chart.timeScale().fitContent();
+  }
 }
 function sma(values, period) { return values.map((_, i) => i < period - 1 ? null : values.slice(i - period + 1, i + 1).reduce((sum, n) => sum + n, 0) / period); }
 function ema(values, period) { const factor = 2 / (period + 1); let value; return values.map((n, i) => { value = i ? value + factor * (n - value) : n; return i < period - 1 ? null : value; }); }
@@ -826,8 +835,11 @@ function showHoverQuote(idx) {
 }
 let loadRetryTimer = null, loadRetries = 0;
 async function load() {
+  if (inBacktestMode) return;
+  const myGeneration = loadGeneration;
   const provider = $('#provider').value || 'DEMO', symbol = $('#symbol').value.trim() || 'NSE:NIFTY 50';
   inBacktestMode = false;
+  chart.applyOptions({ timeScale: { timeVisible: interval !== '1d' } });
   $('#backtestStockSelect').hidden = true;
   cancelDraft();
   clearInterval(liveTimer);
@@ -842,6 +854,7 @@ async function load() {
       throw Error(msg);
     }
     const data = await response.json();
+    if (inBacktestMode || loadGeneration !== myGeneration) return;
     candles = data.candles;
     noMoreHistory = false;
     const reqInterval = interval;
@@ -853,6 +866,7 @@ async function load() {
       const backfillResponse = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${backfillLimit}&to=${to}`);
       if (!backfillResponse.ok) break;
       const older = await backfillResponse.json();
+      if (inBacktestMode || loadGeneration !== myGeneration) return;
       if (provider !== $('#provider').value || symbol !== ($('#symbol').value.trim() || 'NSE:NIFTY 50') || reqInterval !== interval) return;
       if (!older.candles || !older.candles.length) { noMoreHistory = true; break; }
       if (older.candles[0].time >= candles[0].time) break;
@@ -1149,7 +1163,7 @@ async function setup() {
   refreshIndices();
   setInterval(refreshIndices, 10000);
   chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-    if (!range || range.from == null || !candles.length || loadingMore || noMoreHistory) return;
+    if (!range || range.from == null || !candles.length || loadingMore || noMoreHistory || inBacktestMode) return;
     const bufferBars = 30;
     if (range.from < bufferBars && range.to < candles.length - 1) loadMore();
   });
@@ -1162,9 +1176,10 @@ async function setup() {
   $('#symbol').value = 'NSE:NIFTY 50';
   renderSymbolCheckboxList(groups);
   setSelectedSymbols(['NSE:NIFTY 50']);
-  const today = new Date(), yearAgo = new Date(today); yearAgo.setMonth(today.getMonth() - 1);
-  $('#backtestStart').value = yearAgo.toISOString().slice(0, 10);
-  $('#backtestEnd').value = today.toISOString().slice(0, 10);
+  const todayIst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })), yearAgoIst = new Date(todayIst); yearAgoIst.setMonth(todayIst.getMonth() - 1);
+  const pad = n => String(n).padStart(2, '0');
+  $('#backtestStart').value = `${yearAgoIst.getFullYear()}-${pad(yearAgoIst.getMonth() + 1)}-${pad(yearAgoIst.getDate())}`;
+  $('#backtestEnd').value = `${todayIst.getFullYear()}-${pad(todayIst.getMonth() + 1)}-${pad(todayIst.getDate())}`;
   const urlParams = new URLSearchParams(window.location.search);
   const brokerParam = urlParams.get('broker');
   if (brokerParam && urlParams.has('connected')) {
@@ -1197,9 +1212,12 @@ async function setup() {
       } catch {}
     }
   }
-  $('#provider').dispatchEvent(new Event('change'));
+  await restoreBacktestSettings();
+  if (!backtestRuns.length) {
+    $('#provider').dispatchEvent(new Event('change'));
+  }
   $('#symbol').addEventListener('change', () => {
-    if (inBacktestMode && backtestRuns.length) {
+    if (inBacktestMode) {
       const target = $('#symbol').value;
       if (backtestRuns.some(run => run.symbol === target)) { showBacktestChart(target); return; }
       inBacktestMode = false;
@@ -1211,7 +1229,8 @@ async function setup() {
     if (!e.target.dataset.i) return;
     interval = e.target.dataset.i;
     $$('#timeframes button').forEach(b => b.classList.toggle('active', b === e.target));
-    if (inBacktestMode && backtestRuns.length) inBacktestMode = false;
+    chart.applyOptions({ timeScale: { timeVisible: interval !== '1d' } });
+    if (inBacktestMode) inBacktestMode = false;
     load();
   };
   const pnlToggle = $('#pnlToggle');
@@ -1220,7 +1239,7 @@ async function setup() {
     pnlBadgeVisible = pnlToggle.checked;
     try { localStorage.setItem('prism.showPnlBadge', pnlBadgeVisible ? '1' : '0'); } catch {}
     updatePnlBadge();
-    if (inBacktestMode && backtestRuns.length) {
+    if (inBacktestMode) {
       const run = backtestRuns.find(item => item.symbol === $('#backtestStockSelect').value) || backtestRuns[0];
       if (run) backtestMarkers(run);
     }
@@ -1290,7 +1309,6 @@ async function setup() {
   $('#vaultDialogClose').onclick = () => { document.getElementById('vaultDialog').close(); };
   $('#vaultDialogDone').onclick = () => { document.getElementById('vaultDialog').close(); };
   $('#vaultLogout').onclick = logout;
-  restoreBacktestSettings();
 }
 function showIndicators() {
   $('#indicatorList').innerHTML = active.map((item, i) => {
@@ -1593,7 +1611,16 @@ function showBacktestChart(symbol) {
   $('#symbol').value = symbol;
   $('#backtestStockSelect').value = symbol;
   $('#intervalName').textContent = ` - backtest ${interval}`;
-  updateQuote(); render(); backtestMarkers(run); chart.timeScale().fitContent();
+  chart.applyOptions({ timeScale: { timeVisible: interval !== '1d' } });
+  updateQuote(); render(); backtestMarkers(run);
+  const firstSec = candles[0] ? candles[0].time / 1000 : 0;
+  const lastSec = candles.length ? candles[candles.length - 1].time / 1000 : 0;
+  const fitChart = () => {
+    try { chart.timeScale().fitContent(); } catch(e) {}
+    try { chart.timeScale().setVisibleLogicalRange({ from: 0, to: candles.length - 1 }); } catch(e) {}
+    try { if (firstSec && lastSec) chart.timeScale().setVisibleRange({ from: firstSec, to: lastSec }); } catch(e) {}
+  };
+  requestAnimationFrame(() => { fitChart(); setTimeout(fitChart, 100); setTimeout(fitChart, 300); });
   const badge = $('#backtestPnlBadge'), badgePnl = run.stockPnl ?? run.pnl, badgeBase = backtestCapital ? backtestCapital / backtestRuns.length : run.allocated, badgePct = badgeBase ? badgePnl / badgeBase * 100 : 0;
   badge.className = 'pnl-badge';
   badge.classList.add(badgePnl >= 0 ? 'pnl-positive' : 'pnl-negative');
@@ -1644,6 +1671,7 @@ function exportBacktest() {
 }
 function clearBacktest() {
   backtestRuns = [];
+  inBacktestMode = false;
   $('#backtestResults').hidden = true;
   $('#backtestStockSelect').hidden = true;
   updatePnlBadge();
@@ -1670,18 +1698,51 @@ async function runBacktest() {
   if (!start || !end || start > end) return toast('Enter a valid start and end date.');
   if (!symbols.length) return toast('Select at least one stock to test.');
   if (!quantity || quantity < 1 || !capital || capital <= 0) return toast('Quantity and capital must be positive values.');
-  const period = $('#backtestInterval').value, from = Math.floor(new Date(`${start}T00:00:00`).getTime() / 1000), to = Math.floor(new Date(`${end}T23:59:59`).getTime() / 1000);
+  const period = $('#backtestInterval').value, fromSec = Math.floor(new Date(`${start}T00:00:00+05:30`).getTime() / 1000), toSec = Math.floor(new Date(`${end}T23:59:59+05:30`).getTime() / 1000);
   const seconds = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 }[period];
-  const limit = Math.min(5000, Math.max(20, Math.ceil((to - from) / seconds) + 10));
+  const expectedCandles = Math.ceil((toSec - fromSec) / seconds) + 1;
+  const BATCH = 5000;
   const button = $('#runBacktest'); button.disabled = true; button.textContent = 'Running…';
+  $('#backtestStockSelect').hidden = true; $('#backtestStockSelect').innerHTML = '';
+  const myGeneration = ++loadGeneration;
+  inBacktestMode = true;
+  clearInterval(liveTimer);
   try {
     const provider = $('#provider').value || 'DEMO';
-    const symbolsData = await Promise.all(symbols.map(async symbol => {
-      const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${period}&from=${from}&to=${to}&limit=${limit}`);
-      if (!response.ok) throw new Error(symbol);
-      const data = await response.json();
-      return { symbol, data: (data.candles || []).filter(candle => candle.time >= from * 1000 && candle.time <= to * 1000) };
-    }));
+    const symbolsData = [];
+    const isDemo = provider === 'DEMO';
+    for (let si = 0; si < symbols.length; si++) {
+      const symbol = symbols[si];
+      let allCandles = [];
+      if (isDemo) {
+        button.textContent = symbols.length > 1 ? `Fetching ${si + 1}/${symbols.length} ${symbol}…` : `Fetching ${symbol}…`;
+        const limit = Math.min(100000, expectedCandles);
+        const response = await fetch(`/api/candles?provider=DEMO&symbol=${encodeURIComponent(symbol)}&interval=${period}&from=${fromSec}&to=${toSec}&limit=${limit}`);
+        if (!response.ok) throw new Error(symbol);
+        const data = await response.json();
+        allCandles = (data.candles || []).filter(c => c.time >= fromSec * 1000 && c.time <= toSec * 1000);
+      } else {
+        let batchFrom = fromSec, batch = 0;
+        while (batchFrom <= toSec) {
+          batch++;
+          button.textContent = symbols.length > 1 ? `Fetching ${si + 1}/${symbols.length} ${symbol}… batch ${batch}` : `Fetching ${symbol}… batch ${batch}`;
+          const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${period}&from=${batchFrom}&to=${toSec}&limit=${BATCH}`);
+          if (!response.ok) throw new Error(symbol);
+          const data = await response.json();
+          const candles = data.candles || [];
+          if (!candles.length) break;
+          allCandles.push(...candles);
+          if (candles.length < BATCH) break;
+          const lastTime = candles[candles.length - 1].time;
+          batchFrom = Math.floor(lastTime / 1000) + seconds;
+          if (batchFrom > toSec) break;
+        }
+        const seen = new Set();
+        allCandles = allCandles.filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; }).sort((a, b) => a.time - b.time).filter(c => c.time >= fromSec * 1000 && c.time <= toSec * 1000);
+      }
+      symbolsData.push({ symbol, data: allCandles });
+    }
+    button.textContent = 'Running backtest…';
     backtestCapital = capital;
     backtestRuns = executeBacktestShared(symbolsData, strategy, strategyParams(), quantity, capital, Math.max(0, Math.trunc(Number($('#backtestMaxTrades').value) || 0)));
     const stockSelect = $('#backtestStockSelect');
