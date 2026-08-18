@@ -1297,6 +1297,7 @@ async function setup() {
   resetCustomStrategy();
   try { await loadCustomStrategies(); } catch { toast('Saved custom strategies are unavailable.'); }
   $('#runBacktest').onclick = runBacktest;
+  $('#uncheckAllSymbols').onclick = () => setSelectedSymbols([]);
   $('#backtestStockSelect').onchange = () => showBacktestChart($('#backtestStockSelect').value);
   $('#clearBacktest').onclick = clearBacktest;
   $('#accountBtn').onclick = () => { account.loggedIn ? openVaultDialog() : openAccountDialog('login'); };
