@@ -12,7 +12,6 @@ let drawings = [], drawMode = 'select', drawColor = '#47d7d1', selectedDrawing =
 const intervalSeconds = () => ({ '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 }[interval] || 86400);
 const defaultLimit = () => ({ '1m': 9000, '5m': 2000, '15m': 700, '1h': 200, '1d': 30 }[interval] || 30);
 const ONE_MONTH_MS = 30 * 24 * 3600 * 1000;
-const MIN_TRADE_QTY = 100;
 const INDICATOR_PARAMS = {
   BB: [['period', 'Period', 20], ['std', 'Std dev', 2]], KC: [['period', 'EMA', 20], ['mult', 'ATR mult', 2]], DC: [['period', 'Period', 20]], ENVELOPE: [['period', 'Period', 20], ['percent', 'Width %', 2.5]],
   SAR: [['accel', 'Acceleration', .02], ['maxAccel', 'Maximum', .2]], SUPERTREND: [['atrPeriod', 'ATR period', 10], ['mult', 'Multiplier', 3]], ICHIMOKU: [['conversion', 'Conversion', 9], ['base', 'Base', 26], ['spanB', 'Span B', 52]],
@@ -1540,14 +1539,16 @@ function executeBacktestShared(symbolsData, strategy, params, quantity, capital,
     }
     return { symbol, data, plan };
   });
+  const allocation = symbolsData.length ? capital / symbolsData.length : capital;
   const events = plans.flatMap(plan => plan.plan).sort((a, b) => a.time - b.time);
   const opens = new Map(), realizedEvents = [], dailyTrades = new Map();
-  let cash = capital;
+  const cashBySymbol = new Map(symbolsData.map(({ symbol }) => [symbol, allocation]));
   const orders = [];
   events.forEach(event => {
     if (event.type === 'BUY') {
-      const qty = Math.min(event.qty, Math.floor(cash / event.price));
-      if (qty < MIN_TRADE_QTY) return;
+      const budget = cashBySymbol.get(event.symbol) ?? allocation;
+      const qty = Math.max(1, Math.min(event.qty, Math.floor(budget / event.price)));
+      if (qty < 1) return;
       if (maxTradesPerDay) {
         const day = Math.floor(event.time / 86400000), key = event.symbol + '|' + day;
         const count = dailyTrades.get(key) || 0;
@@ -1555,24 +1556,24 @@ function executeBacktestShared(symbolsData, strategy, params, quantity, capital,
         dailyTrades.set(key, count + 1);
       }
       const amount = qty * event.price;
-      cash -= amount;
+      cashBySymbol.set(event.symbol, budget - amount);
       opens.set(event.symbol, { qty, price: event.price, amount });
       orders.push({ symbol: event.symbol, type: 'BUY', qty, price: event.price, amount, pnl: null, time: event.time });
     } else {
       const position = opens.get(event.symbol);
       if (!position) return;
       const amount = position.qty * event.price, pnl = amount - position.amount;
-      cash += amount;
+      cashBySymbol.set(event.symbol, (cashBySymbol.get(event.symbol) ?? allocation) + amount);
       opens.delete(event.symbol);
-      realizedEvents.push({ time: event.time, pnl });
+      realizedEvents.push({ symbol: event.symbol, time: event.time, pnl });
       orders.push({ symbol: event.symbol, type: 'SELL', qty: position.qty, price: event.price, amount, pnl, time: event.time, reason: event.reason, forced: event.forced });
     }
   });
-  const netPnl = cash - capital;
+  const netPnl = [...cashBySymbol.values()].reduce((sum, value) => sum + value, 0) - capital;
   return plans.map(({ symbol, data }) => {
     const symbolOrders = orders.filter(order => order.symbol === symbol);
     const realizedByTime = new Map();
-    realizedEvents.forEach(event => realizedByTime.set(event.time, (realizedByTime.get(event.time) || 0) + event.pnl));
+    realizedEvents.filter(event => event.symbol === symbol).forEach(event => realizedByTime.set(event.time, (realizedByTime.get(event.time) || 0) + event.pnl));
     const orderByTime = new Map(symbolOrders.map(order => [order.time, order]));
     let realized = 0, openPosition = null;
     const equity = data.map(candle => {
@@ -1588,7 +1589,7 @@ function executeBacktestShared(symbolsData, strategy, params, quantity, capital,
     const grossProfit = completed.filter(order => order.pnl > 0).reduce((sum, order) => sum + order.pnl, 0);
     const grossLoss = completed.filter(order => order.pnl < 0).reduce((sum, order) => sum + order.pnl, 0);
     const stockPnl = completed.reduce((sum, order) => sum + order.pnl, 0);
-    return { symbol, data, orders: symbolOrders, equity, stockPnl, allocated: capital, endingValue: cash, pnl: netPnl, stats: { trades: completed.length, wins: completed.filter(order => order.pnl > 0).length, grossProfit, grossLoss } };
+    return { symbol, data, orders: symbolOrders, equity, stockPnl, allocated: allocation, endingValue: cashBySymbol.get(symbol) ?? allocation, pnl: netPnl, stats: { trades: completed.length, wins: completed.filter(order => order.pnl > 0).length, grossProfit, grossLoss } };
   });
 }
 function backtestMarkers(run) {
