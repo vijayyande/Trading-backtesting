@@ -1659,13 +1659,17 @@ function exportBacktest() {
   const workbook = XLSX.utils.book_new(), summarySheet = XLSX.utils.aoa_to_sheet(summary), tradesSheet = XLSX.utils.json_to_sheet(rows);
   summarySheet['!cols'] = [{ wch: 24 }, { wch: 18 }]; tradesSheet['!cols'] = [{ wch: 18 }, { wch: 22 }, { wch: 10 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
   XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary'); XLSX.utils.book_append_sheet(workbook, tradesSheet, 'Trades');
+  const usedSheets = new Set(['Summary', 'Trades']);
   backtestRuns.forEach(run => {
-    const sheetName = run.symbol.replace(/[^A-Za-z0-9_\- ]/g, '-').slice(0, 31) || 'OHLC';
+    let sheetName = run.symbol.replace(/[^A-Za-z0-9_\- ]/g, '-').slice(0, 31) || 'OHLC';
+    let unique = sheetName, n = 2;
+    while (usedSheets.has(unique)) unique = `${sheetName} (${n++})`;
+    usedSheets.add(unique);
     const ohlcData = [['Time', 'Open', 'High', 'Low', 'Close', 'Volume']];
     run.data.forEach(c => ohlcData.push([ist(c.time), c.open, c.high, c.low, c.close, c.volume]));
     const ohlcSheet = XLSX.utils.aoa_to_sheet(ohlcData);
     ohlcSheet['!cols'] = [{ wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
-    XLSX.utils.book_append_sheet(workbook, ohlcSheet, sheetName);
+    XLSX.utils.book_append_sheet(workbook, ohlcSheet, unique);
   });
   XLSX.writeFile(workbook, `backtest-results-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
@@ -1683,7 +1687,7 @@ function renderSymbolCheckboxList(groups) {
     group.symbols.map(symbol => `<label class="symbol-checkbox-row"><input type="checkbox" value="${escapeHtml(symbol.value)}"><span>${escapeHtml(symbol.label)}</span></label>`).join('')
   ).join('');
 }
-function selectedSymbols() { return [...document.querySelectorAll('#backtestSymbols input[type=checkbox]:checked')].map(input => input.value); }
+function selectedSymbols() { return [...new Set([...document.querySelectorAll('#backtestSymbols input[type=checkbox]:checked')].map(input => input.value))]; }
 function setSelectedSymbols(values) {
   const set = new Set(values);
   document.querySelectorAll('#backtestSymbols input[type=checkbox]').forEach(input => { input.checked = set.has(input.value); });
