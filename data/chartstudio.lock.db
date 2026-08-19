@@ -1,6 +1,6 @@
 #FileLock
-#Tue Aug 18 17:34:44 IST 2026
+#Wed Aug 19 09:20:48 IST 2026
 hostName=vijay
-id=1a014c27062171d9e78089227bc53350f7300c7cbb2
+id=1a018249e18803068f8d7a56f4b44c3ba2f9a211b1c
 method=file
-server=192.168.0.134\:59999
+server=192.168.0.134\:60552

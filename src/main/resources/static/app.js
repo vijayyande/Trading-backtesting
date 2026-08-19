@@ -980,7 +980,7 @@ function seriesControls(side, path, allowNumber, operator, allowMath = false) {
   const indicator = `<select class="cc-side" data-field="${path}.indicator">${allowNumber ? `<option value="NUMBER" ${side.indicator === 'NUMBER' ? 'selected' : ''}>Number…</option>` : ''}${options}</select>`;
   if (side.indicator === 'NUMBER') {
     const range = operator === 'between' || operator === 'outside';
-    return indicator + `<input data-field="${path}.number" type="number" step="any" class="cc-number" value="${side.number ?? ''}" placeholder="Value" title="Numeric target value">${range ? `<input data-field="${path}.number2" type="number" step="any" class="cc-number" value="${side.number2 ?? ''}" placeholder="Upper" title="Upper bound">` : ''}`;
+    return `<span class="cc-side-box">${indicator}<input data-field="${path}.number" type="number" step="any" class="cc-number" value="${side.number ?? ''}" placeholder="Value" title="Numeric target value">${range ? `<input data-field="${path}.number2" type="number" step="any" class="cc-number" value="${side.number2 ?? ''}" placeholder="Upper" title="Upper bound">` : ''}</span>`;
   }
   const signals = conditionSignals(side.indicator);
   const signal = signals ? `<select class="cc-signal" data-field="${path}.signal" title="Signal to compare">${signals.map(([key, label]) => `<option value="${key}" ${(side.signal || defaultSignal(side.indicator)) === key ? 'selected' : ''}>${label}</option>`).join('')}</select>` : '';
@@ -989,7 +989,8 @@ function seriesControls(side, path, allowNumber, operator, allowMath = false) {
     return `<input data-side="${path}" data-param="${key}" type="number" step="${isDecimalParam(key) ? 'any' : '1'}" value="${value}" title="${label}" placeholder="${label}">`;
   }).join('');
   const candle = ['OPEN', 'HIGH', 'LOW', 'CLOSE'].includes(side.indicator) ? `<input data-field="${path}.offset" type="number" step="1" class="cc-candle" value="${side.offset ?? 0}" title="Candle to use in the comparison: 0 = most recent candle, -1 = previous candle, -2 = two candles ago" placeholder="0">` : '';
-  return indicator + signal + `<span class="cc-params">${params}${candle}</span>`;
+  const tf = `<select data-field="${path}.timeframe" class="cc-tf" title="Compute this indicator on a different timeframe; 'Same' uses the chart/backtest interval"><option value="">Same</option>${Object.entries(MTF_SECONDS).map(([key]) => `<option value="${key}" ${(side.timeframe || '') === key ? 'selected' : ''}>${key}</option>`).join('')}</select>`;
+  return `<span class="cc-side-box">${tf}${indicator}${signal}<span class="cc-params">${params}${candle}</span></span>`;
 }
 function sideControls(side, dataField, operator) {
   if (side.indicator === 'MATH') {
@@ -1373,8 +1374,8 @@ function crossSignals(data, fast, slow) {
   });
   return signals;
 }
-function computeStrategy(name, params, data) {
-  if (name?.startsWith('CUSTOM:')) return computeCustomStrategy(customStrategies.get(name.slice(7))?.config, data, params);
+function computeStrategy(name, params, data, mtfSeries) {
+  if (name?.startsWith('CUSTOM:')) return computeCustomStrategy(customStrategies.get(name.slice(7))?.config, data, params, mtfSeries);
   const s = STRATEGIES[name];
   if (!s || !data || data.length < 20) return [];
   return s.compute(data, params);
@@ -1387,7 +1388,73 @@ function mathApply(x, y, op) {
   if (op === 'max') return Math.max(x, y);
   return x - y;
 }
-function customSeries(condition, data) {
+const MTF_SECONDS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 };
+function dataIntervalSeconds(data) {
+  let minGap = 0;
+  for (let i = 1; i < data.length && i < 500; i++) {
+    const gap = data[i].time - data[i - 1].time;
+    if (gap > 0 && (!minGap || gap < minGap)) minGap = gap;
+  }
+  if (!minGap) return 0;
+  for (const seconds of [60, 300, 900, 3600, 86400]) if (minGap >= seconds * 1000 * 0.95 && minGap <= seconds * 1000 * 1.05) return seconds;
+  return Math.round(minGap / 1000);
+}
+function aggregateCandles(data, tfSeconds) {
+  const tfMs = tfSeconds * 1000;
+  const phase = data.length ? data[0].time % tfMs : 0;
+  const out = [];
+  for (const candle of data) {
+    const bucket = Math.floor((candle.time - phase) / tfMs) * tfMs + phase;
+    const last = out[out.length - 1];
+    if (last && last.time === bucket) {
+      last.high = Math.max(last.high, candle.high);
+      last.low = Math.min(last.low, candle.low);
+      last.close = candle.close;
+      last.volume += candle.volume;
+    } else out.push({ time: bucket, open: candle.open, high: candle.high, low: candle.low, close: candle.close, volume: candle.volume });
+  }
+  return out;
+}
+function customSeries(condition, data, mtfSeries) {
+  const tfSeconds = condition.timeframe ? MTF_SECONDS[condition.timeframe] : 0;
+  if (!tfSeconds) return computeIndicatorSeries(condition, data, mtfSeries);
+  const fetched = mtfSeries && mtfSeries[condition.timeframe];
+  const dataSeconds = dataIntervalSeconds(data);
+  if ((!fetched || !fetched.length) && tfSeconds <= dataSeconds) return computeIndicatorSeries(condition, data, mtfSeries);
+  const aggregated = (fetched && fetched.length) ? fetched : aggregateCandles(data, tfSeconds);
+  const values = computeIndicatorSeries(condition, aggregated, mtfSeries);
+  const out = new Array(data.length).fill(null);
+  let aggIndex = 0;
+  for (let i = 0; i < data.length; i++) {
+    const t = data[i].time;
+    while (aggIndex + 1 < aggregated.length && aggregated[aggIndex + 1].time <= t) aggIndex++;
+    if (aggregated[aggIndex] && aggregated[aggIndex].time <= t) out[i] = values[aggIndex];
+  }
+  return out;
+}
+function collectTimeframes(config) {
+  const tfs = new Set();
+  const visit = side => {
+    if (!side) return;
+    if (side.timeframe) tfs.add(side.timeframe);
+    if (side.indicator === 'MATH') { visit(side.a); visit(side.b); }
+  };
+  (config.entryConditions || []).forEach(c => { visit(c.left); visit(c.right); });
+  (config.exitConditions || []).forEach(c => { visit(c.left); visit(c.right); });
+  return [...tfs];
+}
+function maxPeriodBars(config) {
+  let max = 14;
+  const visit = side => {
+    if (!side || side.indicator === 'NUMBER') return;
+    if (side.indicator === 'MATH') { visit(side.a); visit(side.b); return; }
+    [side.params?.period, side.params?.fast, side.params?.slow, side.params?.signal, side.params?.atrPeriod, side.params?.stochPeriod, side.params?.conversion, side.params?.base, side.params?.spanB, side.params?.k, side.params?.d, side.params?.rsiPeriod, side.params?.short, side.params?.long, side.params?.roc1, side.params?.roc2, side.params?.roc3, side.params?.roc4, side.params?.sma1, side.params?.sma2, side.params?.sma3, side.params?.sma4, side.params?.mid, side.params?.s3].forEach(value => { const n = Number(value); if (n > 1 && n < 10000 && n > max) max = n; });
+  };
+  (config.entryConditions || []).forEach(c => { visit(c.left); visit(c.right); });
+  (config.exitConditions || []).forEach(c => { visit(c.left); visit(c.right); });
+  return max;
+}
+function computeIndicatorSeries(condition, data, mtfSeries) {
   const close = data.map(c => c.close), params = condition.params || {};
   const period = Math.max(2, Number(params.period ?? condition.period) || 14);
   const setting = (key, fallback) => Number(params[key] ?? condition[key] ?? fallback);
@@ -1451,8 +1518,8 @@ function customSeries(condition, data) {
   if (condition.indicator === 'PRC') { const sig = condition.signal || 'high'; return data.map((_, i) => i < period - 1 ? null : sig === 'low' ? Math.min(...data.slice(i - period + 1, i + 1).map(c => c.low)) : Math.max(...data.slice(i - period + 1, i + 1).map(c => c.high))); }
   if (condition.indicator === 'ELDER') { const avg = ema(close, period), bull = data.map((c, i) => avg[i] == null ? null : c.high - avg[i]), bear = data.map((c, i) => avg[i] == null ? null : c.low - avg[i]); return condition.signal === 'bear' ? bear : bull; }
   if (condition.indicator === 'MATH') {
-    const a = customSeries(condition.a?.indicator === 'MATH' ? { indicator: 'CLOSE', params: {}, signal: null } : condition.a, data);
-    const b = condition.b?.indicator === 'NUMBER' ? Number(condition.b.number) : customSeries(condition.b?.indicator === 'MATH' ? { indicator: 'CLOSE', params: {}, signal: null } : condition.b, data);
+    const a = customSeries(condition.a?.indicator === 'MATH' ? { indicator: 'CLOSE', params: {}, signal: null } : condition.a, data, mtfSeries);
+    const b = condition.b?.indicator === 'NUMBER' ? Number(condition.b.number) : customSeries(condition.b?.indicator === 'MATH' ? { indicator: 'CLOSE', params: {}, signal: null } : condition.b, data, mtfSeries);
     const op = condition.op || 'sub';
     if (typeof b === 'number') return a.map(v => v == null ? null : mathApply(v, b, op));
     return a.map((v, i) => v == null || b[i] == null ? null : mathApply(v, b[i], op));
@@ -1481,13 +1548,13 @@ function conditionPass(condition, leftValues, rightValues, index, data) {
   }
   return condition.operator === 'below' ? value < target : value > target;
 }
-function computeCustomStrategy(config, data, params = {}) {
+function computeCustomStrategy(config, data, params = {}, mtfSeries) {
   if (!config?.entryConditions?.length || !data?.length) return [];
   config = JSON.parse(JSON.stringify(config));
   config.entryConditions.forEach(normalizeCondition); (config.exitConditions || []).forEach(normalizeCondition);
   finalizeLogic(config.entryConditions, config.entryLogic); finalizeLogic(config.exitConditions, config.exitLogic);
-  const entry = config.entryConditions.map(c => ({ condition: c, left: customSeries(c.left, data), right: c.right.indicator === 'NUMBER' ? null : customSeries(c.right, data) }));
-  const exit = (config.exitConditions || []).map(c => ({ condition: c, left: customSeries(c.left, data), right: c.right.indicator === 'NUMBER' ? null : customSeries(c.right, data) }));
+  const entry = config.entryConditions.map(c => ({ condition: c, left: customSeries(c.left, data, mtfSeries), right: c.right.indicator === 'NUMBER' ? null : customSeries(c.right, data, mtfSeries) }));
+  const exit = (config.exitConditions || []).map(c => ({ condition: c, left: customSeries(c.left, data, mtfSeries), right: c.right.indicator === 'NUMBER' ? null : customSeries(c.right, data, mtfSeries) }));
   const stopLoss = Math.max(0, Number(config.stopLoss) || 0), profitTarget = Math.max(0, Number(config.profitTarget) || 0), quantity = Math.max(1, Number(params.quantity) || 1), signals = [];
   const targetPrice = (entry, value, type, direction) => type === 'POINTS' ? entry + direction * value : type === 'AMOUNT' ? entry + direction * value / quantity : entry * (1 + direction * value / 100);
   const matches = (rules, index) => rules.reduce((result, rule, i) => {
@@ -1521,8 +1588,8 @@ function strategyParams() {
 function money(value) { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(value); }
 function dateTime(time) { return new Date(time).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); }
 function executeBacktestShared(symbolsData, strategy, params, quantity, capital, maxTradesPerDay = 0) {
-  const plans = symbolsData.map(({ symbol, data }) => {
-    const signals = computeStrategy(strategy, { ...params, quantity }, data);
+  const plans = symbolsData.map(({ symbol, data, mtfSeries }) => {
+    const signals = computeStrategy(strategy, { ...params, quantity }, data, mtfSeries);
     const plan = [];
     let position = null;
     signals.forEach(signal => {
@@ -1708,6 +1775,10 @@ async function runBacktest() {
   const seconds = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 }[period];
   const expectedCandles = Math.ceil((toSec - fromSec) / seconds) + 1;
   const BATCH = 5000;
+  const strategyConfig = strategy.startsWith('CUSTOM:') ? customStrategies.get(strategy.slice(7))?.config : null;
+  const timeframes = strategyConfig ? collectTimeframes(strategyConfig) : [];
+  const lookbackBars = timeframes.length ? Math.min(300, Math.max(20, maxPeriodBars(strategyConfig))) : 0;
+  const mtfLookback = timeframes.reduce((max, tf) => Math.max(max, lookbackBars * MTF_SECONDS[tf]), 0);
   const button = $('#runBacktest'); button.disabled = true; button.textContent = 'Running…';
   $('#backtestStockSelect').hidden = true; $('#backtestStockSelect').innerHTML = '';
   const myGeneration = ++loadGeneration;
@@ -1720,13 +1791,17 @@ async function runBacktest() {
     for (let si = 0; si < symbols.length; si++) {
       const symbol = symbols[si];
       let allCandles = [];
+      const mtfSeries = {};
       if (isDemo) {
         button.textContent = symbols.length > 1 ? `Fetching ${si + 1}/${symbols.length} ${symbol}…` : `Fetching ${symbol}…`;
-        const limit = Math.min(100000, expectedCandles);
-        const response = await fetch(`/api/candles?provider=DEMO&symbol=${encodeURIComponent(symbol)}&interval=${period}&from=${fromSec}&to=${toSec}&limit=${limit}`);
+        const demoFrom = mtfLookback ? fromSec - mtfLookback : fromSec;
+        const limit = Math.min(100000, Math.ceil((toSec - demoFrom) / seconds) + 1);
+        const response = await fetch(`/api/candles?provider=DEMO&symbol=${encodeURIComponent(symbol)}&interval=${period}&from=${demoFrom}&to=${toSec}&limit=${limit}`);
         if (!response.ok) throw new Error(symbol);
         const data = await response.json();
-        allCandles = (data.candles || []).filter(c => c.time >= fromSec * 1000 && c.time <= toSec * 1000);
+        const extended = (data.candles || []).sort((a, b) => a.time - b.time);
+        allCandles = extended.filter(c => c.time >= fromSec * 1000 && c.time <= toSec * 1000);
+        if (timeframes.length) timeframes.forEach(tf => { mtfSeries[tf] = aggregateCandles(extended, MTF_SECONDS[tf]); });
       } else {
         let batchFrom = fromSec, batch = 0;
         while (batchFrom <= toSec) {
@@ -1745,8 +1820,17 @@ async function runBacktest() {
         }
         const seen = new Set();
         allCandles = allCandles.filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true; }).sort((a, b) => a.time - b.time).filter(c => c.time >= fromSec * 1000 && c.time <= toSec * 1000);
+        for (const tf of timeframes) {
+          button.textContent = symbols.length > 1 ? `Fetching ${si + 1}/${symbols.length} ${symbol}… ${tf} history` : `Fetching ${symbol}… ${tf} history`;
+          const response = await fetch(`/api/candles?provider=${provider}&symbol=${encodeURIComponent(symbol)}&interval=${tf}&from=${fromSec - lookbackBars * MTF_SECONDS[tf]}&to=${toSec}&limit=${Math.min(100000, Math.ceil((toSec - fromSec + lookbackBars * MTF_SECONDS[tf]) / MTF_SECONDS[tf]) + 1)}`);
+          if (response.ok) {
+            const data = await response.json();
+            const tfSeen = new Set();
+            mtfSeries[tf] = (data.candles || []).filter(c => { if (tfSeen.has(c.time)) return false; tfSeen.add(c.time); return true; }).sort((a, b) => a.time - b.time);
+          }
+        }
       }
-      symbolsData.push({ symbol, data: allCandles });
+      symbolsData.push({ symbol, data: allCandles, mtfSeries });
     }
     button.textContent = 'Running backtest…';
     backtestCapital = capital;
